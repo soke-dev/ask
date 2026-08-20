@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "Ask Nearby",
+    "slug": "ask-nearby",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "ask-nearby",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0B0D10"
+    },
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {},
+    "web": {
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://replit.com/"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Ask Nearby uses the camera so you can photograph or film what you were sent to check, and to set your profile picture.",
+          "microphonePermission": "Ask Nearby records audio with your video so you can say the date and describe what you are seeing.",
+          "photosPermission": "Ask Nearby opens your library only so you can choose a profile picture. Job evidence is always taken with the camera."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Ask Nearby uses your location to confirm you reached the place you were sent to check."
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
