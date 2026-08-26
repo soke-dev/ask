@@ -8,12 +8,18 @@
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development",
-      "node": "20.19.5"
+      "node": "20.19.5",
+      "android": {
+        "buildType": "apk"
+      }
     },
     "preview": {
       "distribution": "internal",
       "channel": "preview",
-      "node": "20.19.5"
+      "node": "20.19.5",
+      "android": {
+        "buildType": "apk"
+      }
     },
     "production": {
       "channel": "production",
