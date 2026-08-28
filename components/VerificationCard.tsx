@@ -29,6 +29,15 @@ export type Verification = {
   mediaType?: 'photo' | 'video';
   /** Where the evidence actually is. Without it the frame is a placeholder. */
   mediaUri?: string | null;
+  /**
+   * Every file the verifier sent, when they sent more than one.
+   *
+   * A submission has always been allowed up to five photos; only the first
+   * ever reached this card, so an asker was shown one picture out of two and
+   * given no sign the rest existed. `mediaUri` stays the representative one
+   * for the frame — this is what the viewer pages through.
+   */
+  mediaUris?: string[];
   status?: 'pending' | 'confirmed' | 'queried';
   /** Identity confirmed. */
   idVerified?: boolean;
@@ -228,6 +237,22 @@ export function VerificationCard({
   const [viewerOpen, setViewerOpen] = useState(false);
   /** The photo at full screen, with pinch and pan. Video has its own. */
   const [photoOpen, setPhotoOpen] = useState(false);
+  /** Which of the photos the full-screen viewer is on. */
+  const [photoIndex, setPhotoIndex] = useState(0);
+
+  /**
+   * The files, with the single-file case folded in.
+   *
+   * Callers that predate multiple evidence still pass only `mediaUri`, and a
+   * card that renders nothing for them would be a worse bug than the one being
+   * fixed. Either shape produces the same array from here down.
+   */
+  const shots =
+    verification.mediaUris && verification.mediaUris.length > 0
+      ? verification.mediaUris
+      : verification.mediaUri
+        ? [verification.mediaUri]
+        : [];
 
   /** The card's video, so the play button can drive it. */
   const cardVideo = useRef<VideoView | null>(null);
@@ -390,6 +415,7 @@ export function VerificationCard({
              * The details are still a tap away from there; the picture is the
              * thing being judged.
              */
+            setPhotoIndex(0);
             setPhotoOpen(true);
           }}
           accessibilityRole="button"
@@ -416,10 +442,46 @@ export function VerificationCard({
             <Text style={[text.data, { color: colors.mutedForeground, flex: 1 }]}>
               {verification.mediaType === 'video'
                 ? 'Tap to play it full size'
-                : 'Tap to open it full screen · pinch to zoom'}
+                : shots.length > 1
+                  ? `${shots.length} photos · tap to open them full screen`
+                  : 'Tap to open it full screen · pinch to zoom'}
             </Text>
           </View>
         </Pressable>
+      )}
+
+      {/*
+        * The rest of what was sent.
+        *
+        * The frame above shows one file, which was the whole of the evidence
+        * as far as this card was concerned — so two photos arrived and the
+        * second was neither shown nor counted. Every file gets a thumbnail
+        * here, the first one included, because a strip that silently starts at
+        * the second picture is its own kind of miscount.
+        *
+        * Photos only. A submission is one kind or the other, and there is no
+        * video player in this app to put behind a second clip.
+        */}
+      {verification.mediaType === 'photo' && shots.length > 1 && (
+        <View style={styles.shotStrip}>
+          {shots.map((shot, i) => (
+            <Pressable
+              key={shot}
+              onPress={() => {
+                setPhotoIndex(i);
+                setPhotoOpen(true);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Open photo ${i + 1} of ${shots.length}`}
+              style={({ pressed }) => [
+                styles.shotThumb,
+                { borderColor: colors.borderStrong, opacity: pressed ? 0.7 : 1 },
+              ]}
+            >
+              <Image source={{ uri: shot }} style={styles.shotImage} contentFit="cover" />
+            </Pressable>
+          ))}
+        </View>
       )}
 
       {/* ── What the check found ────────────────────────────────────
@@ -690,7 +752,7 @@ export function VerificationCard({
       {/* ── Full-size viewer ────────────────────────────────────────── */}
       <PhotoViewer
         visible={photoOpen}
-        uri={verification.mediaUri ?? null}
+        uri={shots[photoIndex] ?? verification.mediaUri ?? null}
         // Where the phone was when it was taken — the detail most worth having
         // in front of you while you look at the picture.
         caption={verification.capturedNear ?? verification.distance ?? null}
@@ -790,6 +852,11 @@ export function VerificationCard({
 }
 
 const styles = StyleSheet.create({
+  shotStrip: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  // Square and 2px-edged, like every other frame in the app.
+  shotThumb: { width: 62, height: 62, borderWidth: 2, overflow: 'hidden' },
+  shotImage: { width: '100%', height: '100%' },
+
   card: { borderRadius: 2, padding: 16, marginBottom: 12, gap: 9 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 11 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },

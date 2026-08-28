@@ -179,11 +179,26 @@ export default function DisputesScreen() {
                         Open the video you sent
                       </Text>
                     ) : (
-                      <Image
-                        source={{ uri: mediaUrl(dispute.evidence.detail) ?? undefined }}
-                        style={styles.evidenceShot}
-                        resizeMode="cover"
-                      />
+                      /*
+                       * Everything that was sent, not the last file written.
+                       *
+                       * Whoever is arguing about this evidence should be
+                       * arguing about all of it — a verifier defending a
+                       * two-photo submission was being shown one of them.
+                       */
+                      <View style={styles.evidenceRow}>
+                        {(dispute.evidence.urls?.length
+                          ? dispute.evidence.urls
+                          : [dispute.evidence.detail]
+                        ).map((u) => (
+                          <Image
+                            key={u}
+                            source={{ uri: mediaUrl(u) ?? undefined }}
+                            style={styles.evidenceShot}
+                            resizeMode="cover"
+                          />
+                        ))}
+                      </View>
                     )
                   ) : null}
 
@@ -250,7 +265,17 @@ export default function DisputesScreen() {
 }
 
 const styles = StyleSheet.create({
-  evidenceShot: { width: '100%', height: 200, borderRadius: 2, marginTop: 10 },
+  evidenceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+
+  // Grows to fill the row on its own, shares it when there are others.
+  evidenceShot: {
+    flexGrow: 1,
+    flexBasis: 200,
+    minWidth: 0,
+    height: 200,
+    borderRadius: 2,
+    marginTop: 10,
+  },
   screen: { flex: 1 },
   scroll: { paddingHorizontal: 20, paddingBottom: 44 },
   backBtn: {

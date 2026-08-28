@@ -29,8 +29,18 @@ export type ServerQuestion = {
   evidenceKind: 'photo' | 'video' | null;
   /** Server path to the file, ready to be made absolute with mediaUrl(). */
   evidenceUrl: string | null;
+  /**
+   * Every file from the attempt. `evidenceUrl` is the first of them, kept for
+   * the places that want one representative image rather than a gallery.
+   */
+  evidenceUrls: string[];
   distanceMetres: number | null;
   disputeStatus: string | null;
+  /**
+   * Set when the verifier sent this over a check that objected: 'warn' or
+   * 'fail'. Null when the gate passed it cleanly, which is the normal case.
+   */
+  sentPastCheck: 'warn' | 'fail' | null;
   minutesLeft: number;
 };
 
@@ -112,6 +122,11 @@ export type ServerDispute = {
   verifierName: string | null;
   evidenceKind: 'photo' | 'video' | null;
   evidenceUrl: string | null;
+  /**
+   * Every file from the attempt. `evidenceUrl` is the first of them, kept for
+   * the places that want one representative image rather than a gallery.
+   */
+  evidenceUrls: string[];
   /** What the verifier wrote when they sent the evidence. */
   answer: string | null;
   /** Which side of it you are on, decided by the server from the rows. */
@@ -143,10 +158,16 @@ export const answeredNearby = () => apiFetch<{ answered: ServerAnswered[] }>('/q
  * without them, because "I am near this place" is the one claim it cannot take
  * on trust from a device.
  */
-export const acceptJob = (id: string, at: { lat: number; lng: number }) =>
+export const acceptJob = (
+  id: string,
+  at: { lat: number; lng: number; where?: string | null },
+) =>
   apiFetch<{ taskId: string }>(`/questions/${id}/accept`, {
     method: 'POST',
-    body: JSON.stringify({ lat: at.lat, lng: at.lng }),
+    // `where` is the reverse-geocoded name of the fix, sent so the server can
+    // judge an area the way a person would. A place like "Oredo" is a whole
+    // LGA and its stored point is only the middle of it.
+    body: JSON.stringify({ lat: at.lat, lng: at.lng, where: at.where ?? null }),
   });
 
 export const submitAnswer = (

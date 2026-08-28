@@ -275,6 +275,15 @@ export default function TrackingScreen() {
   const [response, setResponse] = useState({ ...EMPTY_RESPONSE, workerName: seed.workerName });
   /** False until the server has said what came back, if anything. */
   const [answerLoaded, setAnswerLoaded] = useState(false);
+  /**
+   * Set when the verifier sent this over a check that objected.
+   *
+   * Shown to the asker before they decide. The gate can be overridden — a
+   * blur score is wrong about a real dusk often enough that a wall there
+   * costs honest verifiers real trips — and the price of letting it through
+   * is that the person paying gets told it happened.
+   */
+  const [sentPastCheck, setSentPastCheck] = useState<'warn' | 'fail' | null>(null);
   /** Set by the loader when a verifier has actually taken the job. */
   const [taken, setTaken] = useState(seed.taken);
   const [action, setAction] = useState<EvidenceAction>(null);
@@ -440,6 +449,8 @@ export default function TrackingScreen() {
       const submitted = mine.taskStatus === 'submitted' || mine.taskStatus === 'confirmed';
       if (!submitted || !mine.answer) return;
 
+      setSentPastCheck(mine.sentPastCheck ?? null);
+
       // Only now is there something to show.
       setShown(true);
       setStepIndex((prev) => Math.max(prev, 2));
@@ -470,6 +481,16 @@ export default function TrackingScreen() {
         mediaType: mine.evidenceKind === 'video' ? 'video' : 'photo',
         // Absolute, so the app can actually load it.
         mediaUri: mediaUrl(mine.evidenceUrl),
+        /**
+         * All of them, not just the first.
+         *
+         * A submission can carry up to five photos and the card only ever had
+         * one to show, so an asker who was sent two saw one and had no way to
+         * know the other was there.
+         */
+        mediaUris: mine.evidenceUrls
+          .map((u) => mediaUrl(u))
+          .filter((u): u is string => Boolean(u)),
         status: mine.taskStatus === 'confirmed' ? 'confirmed' : 'pending',
         capturedNear:
           mine.distanceMetres !== null
@@ -1025,6 +1046,17 @@ export default function TrackingScreen() {
                 <Ionicons name="warning-outline" size={15} color={colors.pending} />
                 <Text style={[text.bodySmall, { color: colors.pending, flex: 1 }]}>
                   {settleError}
+                </Text>
+              </View>
+            )}
+
+            {sentPastCheck && (
+              <View style={[styles.settleWarn, { borderColor: colors.danger }]}>
+                <Ionicons name="alert-circle-outline" size={15} color={colors.danger} />
+                <Text style={[text.bodySmall, { color: colors.danger, flex: 1 }]}>
+                  {sentPastCheck === 'fail'
+                    ? 'The automatic check rejected this and the verifier sent it anyway. Look at it closely before you confirm — query it if it is wrong, and the reviewer will see that they were warned.'
+                    : 'The automatic check flagged something here and the verifier sent it anyway. Have a proper look before you confirm.'}
                 </Text>
               </View>
             )}

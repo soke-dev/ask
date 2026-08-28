@@ -11,7 +11,7 @@ import { questionsRouter } from './routes/questions.js';
 import { tidyRouter } from './routes/tidy.js';
 import { pushRouter } from './routes/push.js';
 import { escrowRouter } from './routes/escrow.js';
-import { storageIsEphemeral } from './storage.js';
+import { storageIsEphemeral, storageIsLocal } from './storage.js';
 import { attachRealtime, realtimeStatus } from './realtime.js';
 import { chainStatus } from './chain.js';
 import { relayerStatus } from './relayer.js';
@@ -90,7 +90,9 @@ app.get('/health', async (_req, res) => {
     auth: hasPrivy() ? 'privy' : 'not_configured',
     admin: hasAdmin() ? 'password_set' : 'not_configured',
     vision: hasVision() ? 'configured' : 'not_configured',
-    storage: storageIsEphemeral ? 'disk (development only — files are lost on deploy)' : 'object',
+    storage: storageIsEphemeral
+      ? 'disk (development only — files are lost on deploy)'
+      : config.storageDriver,
     thresholds: {
       sharpness: config.sharpness,
       exposure: config.exposure,
@@ -110,9 +112,15 @@ app.use('/questions', questionsRouter);
 app.use('/escrow', escrowRouter);
 app.use('/evidence', evidenceRouter);
 
-// Local media serving so a checked file can be looked at during development.
-// Not a production path — see storage.ts.
-if (storageIsEphemeral) {
+/**
+ * Serving the evidence this process is holding.
+ *
+ * Mounted for a volume as well as a bare disk. It was gated on
+ * `storageIsEphemeral`, which meant the moment the driver became persistent
+ * the files stopped being reachable — a deployed server that stored evidence
+ * correctly and then served 404 for every photo of it.
+ */
+if (storageIsLocal) {
   app.use('/media', express.static(config.storageDir));
 }
 
@@ -124,8 +132,9 @@ const server = app.listen(config.port, () => {
   if (!hasPrivy()) console.log('  PRIVY_APP_ID/SECRET unset — every request is unauthenticated');
   if (!hasAdmin()) console.log('  ADMIN_PASSWORD_HASH unset — the review desk is unreachable');
   if (!hasGasWallet()) console.log('  GAS_WALLET_PRIVATE_KEY unset — withdrawals are disabled');
-  if (!hasVision()) console.log('  ANTHROPIC_API_KEY unset — relevance check will be skipped');
-  if (storageIsEphemeral) console.log('  disk storage — development only');
+  if (!hasVision()) console.log('  OPENAI_API_KEY unset — relevance check will be skipped');
+  if (storageIsEphemeral) console.log('  disk storage — development only, files are lost on deploy');
+  if (config.storageDriver === 'volume') console.log(`  volume storage at ${config.storageDir}`);
 });
 
 // Shares the HTTP server, so realtime needs no second port and no second

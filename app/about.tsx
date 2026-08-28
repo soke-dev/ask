@@ -6,6 +6,7 @@ import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
 import { FEE_PERCENT, VERIFIED_ONLY_ABOVE, formatNaira } from '@/constants/money';
+import { Wordmark } from '@/components/Wordmark';
 
 const STEPS = [
   {
@@ -95,9 +96,9 @@ export default function AboutScreen() {
           <Ionicons name="arrow-back" size={18} color={colors.foreground} />
         </Pressable>
 
-        <Text style={[styles.wordmark, { color: colors.foreground, marginTop: 24 }]}>
-          ASK<Text style={{ fontFamily: font.sans, color: colors.mutedForeground }}> NEARBY</Text>
-        </Text>
+        <View style={{ marginTop: 24 }}>
+          <Wordmark size={22} />
+        </View>
 
         <Text style={[text.titleSoft, { color: colors.foreground, marginTop: 14 }]}>
           Real answers from people who are actually there.
@@ -213,7 +214,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  wordmark: { fontFamily: font.sansBold, fontSize: 22, letterSpacing: 1.2 },
   groupLabel: { marginTop: 30, marginBottom: 12 },
   step: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   stepNum: { paddingTop: 2 },

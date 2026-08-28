@@ -126,9 +126,19 @@ export type AdminDispute = {
   distanceMetres: number | null;
   /** The file itself, so a decision is made on the evidence and not its label. */
   evidenceUrl: string | null;
+  /**
+   * Every file from the attempt. `evidenceUrl` is the first of them, kept for
+   * the places that want one representative image rather than a gallery.
+   */
+  evidenceUrls: string[];
   capturedAt: string | null;
   /** What the verifier wrote when they sent it. */
   answer: string | null;
+  /**
+   * Set when the verifier sent this over a check that objected: 'warn' or
+   * 'fail'. Null when the gate passed it cleanly, which is the normal case.
+   */
+  sentPastCheck: 'warn' | 'fail' | null;
 };
 
 export const getOverview = () => call<Overview>('/overview');

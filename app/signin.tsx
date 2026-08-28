@@ -17,19 +17,31 @@ import { font, text } from '@/constants/type';
 import { useApp } from '@/contexts/AppContext';
 import { useEmailLogin, privyConfigured } from '@/utils/privy';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
+import { Wordmark } from '@/components/Wordmark';
 
 function isValidEmail(e: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim());
 }
 
 /**
- * The whole pitch in two lines: what the AI does, then what people do. Stated
- * as capabilities rather than caveats — "answers when it can" led with the
- * limitation, which is a strange thing to put on a sign-in screen.
+ * The whole pitch in two lines: how it happens, then what comes back.
+ *
+ * These used to lead with "AI powered answers in seconds", which argued
+ * against the headline directly above it. The promise is people who are
+ * actually there; opening the case for that with a machine undercuts it, and
+ * "real people verify what AI cannot" sells the product as the fallback for
+ * something else rather than the thing itself.
+ *
+ * There is AI in here — it reads the evidence and tidies a question — but it
+ * is a quality gate behind the scenes, not the reason to sign up, so it does
+ * not belong on the door.
+ *
+ * Neither line repeats the headline. It has already said who does this; these
+ * say what actually happens and what you end up holding.
  */
 const FACTS: { icon: keyof typeof Ionicons.glyphMap; line: string }[] = [
-  { icon: 'flash', line: 'AI powered answers in seconds.' },
-  { icon: 'walk', line: 'Real people verify what AI cannot.' },
+  { icon: 'walk', line: 'Somebody nearby goes and looks.' },
+  { icon: 'camera', line: 'Photo or video back, usually in minutes.' },
 ];
 
 export default function SignInScreen() {
@@ -126,13 +138,17 @@ export default function SignInScreen() {
         <Animated.View style={{ opacity: fade, transform: [{ translateY: rise }] }}>
           {/* ── Masthead ───────────────────────────────────────────── */}
           <View style={styles.masthead}>
-            <Text style={[styles.wordmark, { color: colors.foreground }]}>
-              ASK
-              <Text style={{ fontFamily: font.sans, color: colors.mutedForeground }}>
-                {' '}
-                NEARBY
-              </Text>
-            </Text>
+            {/*
+              * The shared mark, not a second copy of it.
+              *
+              * This screen drew its own two-tone "ASK NEARBY" in local styles,
+              * so the rebrand renamed the app everywhere the component was
+              * used and left the one screen that had its own — the first
+              * screen anybody sees. Rendering the component means the next
+              * change to the mark reaches here whether or not anyone
+              * remembers this file exists.
+              */}
+            <Wordmark size={19} />
 
             <Pressable
               onPress={() => setMode(colors.isDark ? 'light' : 'dark')}
@@ -293,11 +309,22 @@ export default function SignInScreen() {
               )}
             </Pressable>
 
-            <Text style={[text.bodySmall, { color: colors.faintForeground }]}>
-              {privyConfigured
-                ? 'We email you a code — no password to forget. One account asks and earns.'
-                : 'No sign-in service is configured in this build, so this goes straight in.'}
-            </Text>
+            {/*
+              * Only the warning survives here.
+              *
+              * The reassurance it used to carry — that we email a code and one
+              * account both asks and earns — explained the next screen to
+              * somebody who was about to see it anyway, and sat between the
+              * button and the terms doing nothing for either.
+              *
+              * The other branch stays: a build with no sign-in service walks
+              * straight past authentication, and that must not be silent.
+              */}
+            {!privyConfigured && (
+              <Text style={[text.bodySmall, { color: colors.faintForeground }]}>
+                No sign-in service is configured in this build, so this goes straight in.
+              </Text>
+            )}
           </View>
 
           <Text style={[text.data, styles.terms, { color: colors.faintForeground }]}>
@@ -321,7 +348,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 30,
   },
-  wordmark: { fontFamily: font.sansBold, fontSize: 19, letterSpacing: 1.2 },
   errorRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',

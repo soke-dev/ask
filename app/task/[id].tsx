@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Animated,
   Modal,
   Platform,
@@ -302,6 +303,36 @@ export default function TaskScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageState, startIn]);
 
+  /**
+   * Above the `if (!task)` return below, and it has to stay there.
+   *
+   * React counts hooks per render. Sitting after that return, this one ran
+   * only while a task existed — so the moment a job left myJobs, the next
+   * render produced fewer hooks than the last and React threw. Abandoning
+   * a job is exactly that transition, which is what surfaced it.
+   *
+   * The guard moved into the body instead: the hook always runs, and does
+   * nothing until there is something to watch.
+   */
+  useEffect(() => {
+    if (pageState !== 'pending_asker' || !hasApi) return;
+
+    let stopped = false;
+    const check = async () => {
+      const result = await takenJobs();
+      if (!result.ok || stopped) return;
+      const mine = result.data.jobs.find((j) => j.id === task?.id);
+      if (mine?.taskStatus === 'confirmed') setPageState('earned');
+    };
+
+    void check();
+    const timer = setInterval(check, 10_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [pageState, task?.id]);
+
   if (!task) {
     return (
       <View style={[styles.centered, { backgroundColor: colors.background }]}>
@@ -413,6 +444,40 @@ export default function TaskScreen() {
   }
 
   /**
+   * Where the phone is, at the moment the evidence is being sent.
+   *
+   * `coords` was only ever filled by handleAccept, so it lived exactly as long
+   * as the session that took the job. Come back to a job accepted yesterday —
+   * or after the app was killed — and the gate was handed nothing, which is
+   * how somebody who had shared their location was told they had not.
+   *
+   * Capture is also the honest moment to read it. The question the distance
+   * check asks is whether you were at the place when you took this, and
+   * accept-time coordinates cannot answer that: they say where you stood when
+   * you agreed to go.
+   *
+   * Never prompts. Permission was already settled at accept, and a dialog
+   * appearing on top of finished evidence would be asking for a decision at
+   * the worst possible moment. Without it the check simply skips, as before.
+   */
+  async function whereAmINow(): Promise<{ lat: number; lng: number } | null> {
+    try {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') return coords;
+
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const at = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+      setCoords(at);
+      return at;
+    } catch {
+      // A fix that will not arrive must not cost somebody their submission.
+      return coords;
+    }
+  }
+
+  /**
    * Puts the evidence through the gate before the asker ever sees it.
    *
    * What runs depends on what is reachable. Length, photo count and distance
@@ -434,12 +499,14 @@ export default function TaskScreen() {
     const next = attempt + 1;
     setAttempt(next);
 
+    const at = await whereAmINow();
+
     const result = await runEvidenceGate({
       kind: media === 'video' ? 'video' : 'photo',
       files: shots,
       question: askedQuestion,
       placeName: task!.location,
-      captured: coords,
+      captured: at,
       target: targetCoords,
       /**
        * Without this the endpoint checks the file and keeps nothing.
@@ -465,7 +532,7 @@ export default function TaskScreen() {
     setReport(result);
 
     if (result.verdict === 'pass') {
-      await deliver();
+      await deliver(at);
       return;
     }
     setPageState('check_result');
@@ -482,7 +549,7 @@ export default function TaskScreen() {
    * it, resolution would need something to supply the verifier's address, and
    * whatever supplied it could name an address of its own choosing.
    */
-  async function deliver() {
+  async function deliver(at: { lat: number; lng: number } | null = coords) {
     setPageState('ai_checking');
     setDeliverError(null);
 
@@ -491,10 +558,9 @@ export default function TaskScreen() {
     const submitted = await submitAnswer(task!.id, {
       answer: written || 'Evidence attached.',
       evidenceKind: media === 'video' ? 'video' : 'photo',
-      lat: coords?.lat ?? null,
-      lng: coords?.lng ?? null,
-      distanceMetres:
-        coords && targetCoords ? Math.round(distanceMetres(coords, targetCoords)) : null,
+      lat: at?.lat ?? null,
+      lng: at?.lng ?? null,
+      distanceMetres: at && targetCoords ? Math.round(distanceMetres(at, targetCoords)) : null,
     });
 
     if (!submitted.ok) {
@@ -522,30 +588,41 @@ export default function TaskScreen() {
   }
 
   /**
-   * Watches for the asker's decision.
+   * Sends the evidence past a gate that failed it.
    *
-   * The only honest route to "you earned" — a verifier learns they were paid
-   * because the payment happened, not because they tapped a button on their
-   * own device.
+   * The tier-1 checks are arithmetic — blur, exposure, distance from the pin —
+   * and arithmetic is wrong about real places often enough to matter. A flooded
+   * street at dusk reads as underexposed. A mall's pin sits a hundred metres
+   * from the door somebody photographed. The person standing there knows things
+   * the numbers do not, and until now the numbers won and the trip was wasted.
+   *
+   * So the gate stops being a wall. What makes that safe is not the dialog but
+   * the record: the attempt and every check it failed were already written
+   * server-side when the gate ran, and submitting marks that attempt as
+   * overridden — a reviewer sees exactly what was ignored, and by whom.
    */
-  useEffect(() => {
-    if (pageState !== 'pending_asker' || !hasApi) return;
+  async function overrideGate(hardFail: boolean) {
+    tap(Haptics.ImpactFeedbackStyle.Medium);
 
-    let stopped = false;
-    const check = async () => {
-      const result = await takenJobs();
-      if (!result.ok || stopped) return;
-      const mine = result.data.jobs.find((j) => j.id === task?.id);
-      if (mine?.taskStatus === 'confirmed') setPageState('earned');
-    };
+    /**
+     * Asked only on a failure. A warning already says in its own words that
+     * nothing is stopping you, and putting a ban notice in front of that would
+     * read as an accusation for taking the app at its word.
+     */
+    if (hardFail) {
+      const go = await confirm({
+        title: 'Send it past the check?',
+        message:
+          'You are saying the check is wrong and that this is really what you saw. That is recorded against this job, and a reviewer can open it.\n\nSending evidence that is wrong, or that you did not take yourself, gets the account banned and any money on it held.',
+        confirmLabel: 'Send it anyway',
+        cancelLabel: 'Take it again',
+        tone: 'danger',
+      });
+      if (!go) return;
+    }
 
-    void check();
-    const timer = setInterval(check, 10_000);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [pageState, task?.id]);
+    await deliver();
+  }
 
   /** Sends the verifier back to the capture form to try again. */
   function retake() {
@@ -581,8 +658,19 @@ export default function TaskScreen() {
      */
     let whereIAm: string | null = null;
 
+    /**
+     * Why the location is missing, not merely that it is.
+     *
+     * 'refused' means the prompt will never appear again and Settings is the
+     * only way forward; 'unavailable' means moving or waiting will fix it.
+     * Telling somebody to turn on a permission they cannot turn on from here
+     * is worse than saying nothing.
+     */
+    let why: 'refused' | 'unavailable' | null = null;
+
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const { status, canAskAgain } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') why = canAskAgain ? 'unavailable' : 'refused';
       if (status === 'granted') {
         const loc = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
@@ -607,6 +695,7 @@ export default function TaskScreen() {
         setPlace('Location not shared');
       }
     } catch {
+      why = 'unavailable';
       setPlace('Location unavailable');
     }
 
@@ -620,16 +709,40 @@ export default function TaskScreen() {
      */
     if (!at) {
       setPageState('detail');
+
+      if (why === 'refused') {
+        /**
+         * Offer the only door still open.
+         *
+         * Once iOS has been told no, nothing in the app can ask again — so
+         * "turn location on and try again" is advice that cannot be followed.
+         * Somebody taps the button, nothing happens, and there is nothing on
+         * screen to say why.
+         */
+        const go = await confirm({
+          title: 'Location is off for Confam',
+          message:
+            'Taking a job means proving you are at the place, so we need your location. It is switched off for this app, and only Settings can switch it back on.',
+          confirmLabel: 'Open Settings',
+          cancelLabel: 'Not now',
+        });
+        if (go) void Linking.openSettings();
+        return;
+      }
+
+      // Permission held but no fix arrived — indoors, airplane mode, a cold
+      // GPS. A different problem, and a different thing to do about it.
       await notify({
-        title: 'Location needed',
+        title: 'Could not find you',
         message:
-          'We check you are at the place before you take a job. Turn location on and try again.',
+          'We check you are at the place before you take a job, and your location did not come through. Step outside or wait a moment, then try again.',
       });
       return;
-
     }
 
-    const taken = await acceptTask(task!.id, at);
+    // whereIAm is what the phone calls this spot; the server needs it to
+    // judge places that are areas rather than points.
+    const taken = await acceptTask(task!.id, { ...at, where: whereIAm });
     if (!taken.ok) {
       // The job may well still be theirs to take — from somewhere else.
       setPageState('detail');
@@ -744,6 +857,68 @@ export default function TaskScreen() {
     const attemptsLeft = Math.max(0, MAX_ATTEMPTS - attempt);
     const outOfTries = failed && attemptsLeft === 0;
 
+    /**
+     * Checks that did not run are not shown.
+     *
+     * A skipped check has found nothing, but it was formatted exactly like one
+     * that had — same row, same list — so a submission with two real remarks
+     * and three no-ops read as five problems, and the two that mattered were
+     * buried among them.
+     *
+     * Unless everything skipped. Then the box would be empty under a heading
+     * announcing a verdict, and the rows are the only honest answer to what
+     * was actually looked at.
+     */
+    const ran = report.checks.filter((c) => c.verdict !== 'skipped');
+    const shownChecks = ran.length > 0 ? ran : report.checks;
+
+    /**
+     * The way past the gate.
+     *
+     * Offered on a failure now, not only on a warning — and on the last
+     * attempt too, which is exactly where a wrong check costs the most: the
+     * alternative there is losing a trip that was really made to a blur score.
+     *
+     * Emphasis follows the verdict. On a warning this is the primary action,
+     * because nothing is actually wrong. On a failure it sits under the retake
+     * in danger colours, because the checks are usually right and whoever
+     * presses it is putting their own account behind the claim.
+     */
+    const sendAnyway = (
+      <>
+        <Pressable
+          onPress={() => void overrideGate(failed)}
+          style={({ pressed }) => [
+            styles.wideBtn,
+            {
+              backgroundColor: failed ? colors.surface : colors.primary,
+              borderWidth: failed ? 2 : 0,
+              borderColor: colors.danger,
+              opacity: pressed ? 0.88 : 1,
+              marginTop: 10,
+            },
+          ]}
+        >
+          <Text
+            style={[text.action, { color: failed ? colors.danger : colors.primaryForeground }]}
+          >
+            {failed ? 'Send it anyway' : `Send it anyway · claim ₦${yourCut}`}
+          </Text>
+        </Pressable>
+
+        {failed && (
+          <Text
+            style={[
+              text.data,
+              { color: colors.faintForeground, marginTop: 10, textAlign: 'center' },
+            ]}
+          >
+            Wrong evidence, or evidence you did not take, bans the account after review.
+          </Text>
+        )}
+      </>
+    );
+
     return (
       <View style={[styles.screen, { backgroundColor: colors.background }]}>
         <ScrollView
@@ -765,7 +940,7 @@ export default function TaskScreen() {
           </Text>
 
           <View style={[styles.checkList, { borderColor: colors.border }]}>
-            {report.checks.map((check) => (
+            {shownChecks.map((check) => (
               <CheckRow key={check.name} check={check} colors={colors} />
             ))}
           </View>
@@ -783,8 +958,9 @@ export default function TaskScreen() {
               {/* Retrying forever would let a job be held while the asker's
                   deadline runs down, so the job goes back to the pool. */}
               <Text style={[text.body, { color: colors.mutedForeground, marginTop: 16 }]}>
-                That is the last attempt on this one. The job goes back so somebody else can try —
-                nothing is charged to you, and it does not count against your record.
+                That is the last attempt on this one. The job can go back so somebody else can
+                try — nothing is charged to you, and it does not count against your record. If you
+                are sure the check is wrong, you can still send what you have.
               </Text>
               <Pressable
                 onPress={() => router.replace('/(tabs)/earn')}
@@ -797,6 +973,7 @@ export default function TaskScreen() {
                   Find another job
                 </Text>
               </Pressable>
+              {sendAnyway}
             </>
           ) : (
             <>
@@ -823,28 +1000,7 @@ export default function TaskScreen() {
                 </Text>
               </Pressable>
 
-              {/* Override, warnings only. A machine opinion never blocks a
-                  payment on its own — see the relevance check on the API. */}
-              {!failed && (
-                <Pressable
-                  onPress={() => {
-                    tap(Haptics.ImpactFeedbackStyle.Medium);
-                    void deliver();
-                  }}
-                  style={({ pressed }) => [
-                    styles.wideBtn,
-                    {
-                      backgroundColor: colors.primary,
-                      opacity: pressed ? 0.88 : 1,
-                      marginTop: 10,
-                    },
-                  ]}
-                >
-                  <Text style={[text.action, { color: colors.primaryForeground }]}>
-                    Send it anyway · claim ₦{yourCut}
-                  </Text>
-                </Pressable>
-              )}
+              {sendAnyway}
             </>
           )}
         </ScrollView>

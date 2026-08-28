@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { attemptLogin, issueToken, requireAdmin } from '../adminAuth.js';
 import { one, query, transaction } from '../db.js';
 import { storage } from '../storage.js';
+import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
+import { notify } from '../push.js';
 
 export const adminRouter: Router = Router();
 
@@ -110,18 +112,16 @@ adminRouter.get('/disputes', async (_req, res) => {
             pl.name AS "placeName",
             asker.username AS "askerName", verifier.username AS "verifierName",
             e.kind::text AS "evidenceKind", e.distance_metres AS "distanceMetres",
-            e.storage_key AS "evidenceKey", e.captured_at AS "capturedAt",
-            a.body AS answer
+            e.keys AS "evidenceKeys", e.captured_at AS "capturedAt",
+            a.body AS answer,
+            sa.verdict::text AS "sentPastCheck"
        FROM disputes d
        JOIN questions q ON q.id = d.question_id
        LEFT JOIN places pl ON pl.id = q.place_id
        LEFT JOIN profiles asker ON asker.user_id = q.asker_id
        LEFT JOIN tasks t ON t.id = d.task_id
        LEFT JOIN profiles verifier ON verifier.user_id = t.verifier_id
-       LEFT JOIN LATERAL (
-         SELECT kind, distance_metres, storage_key, captured_at FROM evidence
-          WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
-       ) e ON TRUE
+       ${LATEST_EVIDENCE}
        /*
         * What the verifier actually wrote and sent.
         *
@@ -132,6 +132,20 @@ adminRouter.get('/disputes', async (_req, res) => {
        LEFT JOIN LATERAL (
          SELECT body FROM answers WHERE task_id = t.id ORDER BY submitted_at DESC LIMIT 1
        ) a ON TRUE
+       /*
+        * Whether the verifier sent this over a check that objected.
+        *
+        * The gate can be overridden, so the desk has to be able to see that it
+        * was: a reviewer looking at a blurred photo should know the verifier
+        * was told it was blurred and sent it regardless. That is the
+        * difference between a bad camera and a bad actor, and it is the whole
+        * basis for acting on the account rather than just the job.
+        */
+       LEFT JOIN LATERAL (
+         SELECT verdict FROM submission_attempts
+          WHERE task_id = t.id AND overridden
+          ORDER BY attempt DESC LIMIT 1
+       ) sa ON TRUE
       ORDER BY
         CASE d.status WHEN 'awaiting_admin' THEN 0 WHEN 'awaiting_verifier' THEN 1 ELSE 2 END,
         d.created_at DESC
@@ -142,7 +156,15 @@ adminRouter.get('/disputes', async (_req, res) => {
       ...r,
       // A path the desk can load. Without it the evidence is a filename the
       // reviewer has no way to open.
-      evidenceUrl: r.evidenceKey ? storage.urlFor(String(r.evidenceKey)) : null,
+      /**
+       * Every file from the attempt, plus the first of them on its own.
+       *
+       * `evidenceUrl` stays because a card, a thumbnail and a share sheet all
+       * want one representative image and should not each pick their own. The
+       * array is what the viewer opens, so two photos sent are two photos seen.
+       */
+      evidenceUrls: evidenceUrls(r.evidenceKeys),
+      evidenceUrl: evidenceUrls(r.evidenceKeys)[0] ?? null,
     })),
   });
 });
@@ -164,8 +186,11 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
     const outcome = await transaction(async (client) => {
       const { rows } = await client.query(
         `SELECT d.id, d.status, d.question_id, d.task_id,
-                q.asker_id, q.bounty_kobo
-           FROM disputes d JOIN questions q ON q.id = d.question_id
+                q.asker_id, q.bounty_kobo, q.body,
+                t.verifier_id
+           FROM disputes d
+           JOIN questions q ON q.id = d.question_id
+           LEFT JOIN tasks t ON t.id = d.task_id
           WHERE d.id = $1
           FOR UPDATE OF d`,
         [req.params.id],
@@ -208,7 +233,14 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
         );
       }
 
-      return { ok: true as const };
+      return {
+        ok: true as const,
+        askerId: String(dispute.asker_id),
+        verifierId: dispute.verifier_id ? String(dispute.verifier_id) : null,
+        questionId: String(dispute.question_id),
+        question: String(dispute.body ?? ''),
+        bountyKobo: Number(dispute.bounty_kobo),
+      };
     });
 
     if ('error' in outcome) {
@@ -216,6 +248,41 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
       return;
     }
     res.json({ ok: true });
+
+    /**
+     * Both sides are told how it went, and each is told the part that
+     * concerns them.
+     *
+     * A decision that only appears inside the app is a decision the loser
+     * never learns and the winner finds by chance — and this one moves money,
+     * so it is the single most important thing either of them is waiting on.
+     */
+    const summary = outcome.question.slice(0, 60);
+    const naira = Math.round(outcome.bountyKobo / 100);
+
+    void notify({
+      userId: outcome.askerId,
+      kind: 'dispute',
+      title: winner === 'asker' ? 'Your query was upheld' : 'Your query was not upheld',
+      body:
+        winner === 'asker'
+          ? `${summary} — ₦${naira} is back in your wallet.`
+          : `${summary} — the reviewer accepted the answer.`,
+      href: `/tracking/${outcome.questionId}`,
+    });
+
+    if (outcome.verifierId) {
+      void notify({
+        userId: outcome.verifierId,
+        kind: 'dispute',
+        title: winner === 'verifier' ? 'The query was decided your way' : 'The query went against you',
+        body:
+          winner === 'verifier'
+            ? `${summary} — you are being paid for it.`
+            : `${summary} — the bounty went back to the asker.`,
+        href: '/disputes',
+      });
+    }
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'failed' });
   }

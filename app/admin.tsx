@@ -793,6 +793,29 @@ export default function AdminScreen() {
                     {d.distanceMetres !== null ? ` · ${d.distanceMetres}m away` : ''}
                   </Text>
 
+                  {/*
+                    * The verifier was told and sent it regardless.
+                    *
+                    * This is the line that separates a bad camera from a bad
+                    * actor. Overriding the gate is allowed — the checks are
+                    * arithmetic and arithmetic is wrong about real streets —
+                    * but doing it on evidence that turns out to be false is
+                    * what a ban is for, and the desk cannot act on that
+                    * without being able to see it happened.
+                    */}
+                  {d.sentPastCheck && (
+                    <View style={[styles.side, { borderColor: colors.danger }]}>
+                      <Text style={[text.data, { color: colors.danger }]}>
+                        sent past the check · {d.sentPastCheck}
+                      </Text>
+                      <Text style={[text.bodySmall, { color: colors.foreground, marginTop: 3 }]}>
+                        {d.sentPastCheck === 'fail'
+                          ? 'The gate rejected this evidence and the verifier chose to send it anyway, after being warned that false evidence bans the account.'
+                          : 'The gate flagged this evidence and the verifier chose to send it anyway.'}
+                      </Text>
+                    </View>
+                  )}
+
                   <View style={[styles.side, { borderColor: colors.danger }]}>
                     <Text style={[text.data, { color: colors.danger }]}>
                       @{d.askerName ?? 'asker'} · asker
@@ -809,6 +832,7 @@ export default function AdminScreen() {
                     <View style={[styles.side, { borderColor: colors.borderStrong }]}>
                       <Text style={[text.data, { color: colors.faintForeground }]}>
                         evidence · {d.evidenceKind ?? 'file'}
+                        {d.evidenceUrls.length > 1 ? ` · ${d.evidenceUrls.length} files` : ''}
                         {d.capturedAt ? ` · ${new Date(d.capturedAt).toLocaleString()}` : ''}
                       </Text>
                       {d.evidenceKind === 'video' ? (
@@ -822,11 +846,33 @@ export default function AdminScreen() {
                           Open the video
                         </Text>
                       ) : (
-                        <Image
-                          source={{ uri: mediaUrl(d.evidenceUrl) ?? undefined }}
-                          style={styles.evidenceShot}
-                          resizeMode="cover"
-                        />
+                        /*
+                         * Every photo, not the newest one.
+                         *
+                         * A verifier defending themselves may well have sent
+                         * the establishing shot and the close-up, and the desk
+                         * was ruling on whichever of them happened to be
+                         * written last.
+                         */
+                        <View style={styles.evidenceRow}>
+                          {(() => {
+                            const files =
+                              d.evidenceUrls.length > 0
+                                ? d.evidenceUrls
+                                : [d.evidenceUrl as string];
+                            return files.map((u) => (
+                              <Image
+                                key={u}
+                                source={{ uri: mediaUrl(u) ?? undefined }}
+                                // One photo fills the card. Several share it,
+                                // so a second shot is not a scroll away from
+                                // the first while they are being compared.
+                                style={files.length > 1 ? styles.evidenceShotMulti : styles.evidenceShot}
+                                resizeMode="cover"
+                              />
+                            ));
+                          })()}
+                        </View>
                       )}
                       {d.answer && (
                         <Text style={[text.bodySmall, { color: colors.foreground, marginTop: 8 }]}>
@@ -916,10 +962,14 @@ export default function AdminScreen() {
 }
 
 const styles = StyleSheet.create({
+  // Wraps, so a five-photo submission does not run off a desktop card.
+  evidenceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
+
   // Big enough to judge, not so big the queue becomes a gallery.
   // Taller on the desk than it would be on a phone: this is the picture the
   // whole decision turns on, and 190px was a thumbnail.
   evidenceShot: { width: '100%', height: 420, borderRadius: 2, marginTop: 8 },
+  evidenceShotMulti: { flexGrow: 1, flexBasis: 240, minWidth: 0, height: 300, borderRadius: 2 },
   screen: { flex: 1 },
   /**
    * Centred and capped rather than edge to edge.

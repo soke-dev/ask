@@ -114,12 +114,15 @@ evidenceRouter.post('/check', upload.array('files', config.media.maxPhotos), asy
       saved.map((file, i) =>
         client.query<{ id: string }>(
           `INSERT INTO evidence
-             (task_id, kind, storage_key, mime, bytes, width, height,
+             (task_id, attempt, kind, storage_key, mime, bytes, width, height,
               duration_seconds, captured_lat, captured_lng, distance_metres, captured_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
            RETURNING id`,
           [
             body.taskId,
+            // Stamped so a reader can take the whole of the last attempt
+            // rather than the newest single file out of all of them.
+            attempt,
             body.kind,
             file.key,
             files[i]?.mimetype ?? null,

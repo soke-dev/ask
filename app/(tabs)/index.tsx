@@ -61,6 +61,7 @@ import { localityOf } from '@/utils/places';
 import { tidyQuestion } from '@/utils/tidyQuestion';
 import { tidyOnServer } from '@/utils/questionsApi';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
+import { Wordmark } from '@/components/Wordmark';
 
 type ScreenState = 'idle' | 'working' | 'found_answer' | 'needs_verification';
 
@@ -566,9 +567,9 @@ export default function AskScreen() {
       >
         {/* ── Masthead ─────────────────────────────────────────────── */}
         <View style={styles.masthead}>
-          <Text style={[styles.wordmark, { color: colors.foreground }]}>
-            ASK<Text style={{ fontFamily: font.sans, color: colors.mutedForeground }}> NEARBY</Text>
-          </Text>
+          {/* The shared mark, not a fourth copy of it. Every screen drawing
+              its own is exactly why renaming the app reached none of them. */}
+          <Wordmark size={19} />
           <View style={styles.mastheadRight}>
             {state !== 'idle' ? (
               <Pressable
@@ -1613,7 +1614,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 14,
   },
-  wordmark: { fontFamily: font.sansBold, fontSize: 19, letterSpacing: 1.2 },
   mastheadRight: { flexDirection: 'row', gap: 8 },
   ghostBtn: {
     width: 36,

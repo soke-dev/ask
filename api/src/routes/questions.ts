@@ -6,6 +6,7 @@ import { usdcBalanceOf } from '../chain.js';
 import { ngnRate } from '../rates.js';
 import { storage } from '../storage.js';
 import { notify, nearbyVerifiers } from '../push.js';
+import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 
 export const questionsRouter: Router = Router();
 
@@ -273,9 +274,10 @@ questionsRouter.get('/mine', authenticate, async (req, res) => {
             v.username            AS "verifierName",
             a.body                AS answer,
             e.kind::text          AS "evidenceKind",
-            e.storage_key         AS "evidenceKey",
+            e.keys                AS "evidenceKeys",
             e.distance_metres     AS "distanceMetres",
-            d.status::text        AS "disputeStatus"
+            d.status::text        AS "disputeStatus",
+            sa.verdict::text      AS "sentPastCheck"
        FROM questions q
        LEFT JOIN places p   ON p.id = q.place_id
        LEFT JOIN tasks t    ON t.question_id = q.id
@@ -283,11 +285,22 @@ questionsRouter.get('/mine', authenticate, async (req, res) => {
        LEFT JOIN LATERAL (
          SELECT body FROM answers WHERE task_id = t.id ORDER BY submitted_at DESC LIMIT 1
        ) a ON TRUE
-       LEFT JOIN LATERAL (
-         SELECT kind, storage_key, distance_metres FROM evidence
-          WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
-       ) e ON TRUE
+       ${LATEST_EVIDENCE}
        LEFT JOIN disputes d ON d.question_id = q.id
+       /*
+        * Whether the verifier sent this over a check that objected, and how
+        * loudly it objected — 'warn', 'fail', or null for a clean pass.
+        *
+        * The asker is the one being asked to accept the answer, so they are
+        * the one who has to be told the machine had a problem with it. Without
+        * this the override would be invisible to everybody except the desk,
+        * which is the wrong half of the audience.
+        */
+       LEFT JOIN LATERAL (
+         SELECT verdict FROM submission_attempts
+          WHERE task_id = t.id AND overridden
+          ORDER BY attempt DESC LIMIT 1
+       ) sa ON TRUE
       WHERE q.asker_id = $1
       ORDER BY q.created_at DESC
       LIMIT 100`,
@@ -299,7 +312,15 @@ questionsRouter.get('/mine', authenticate, async (req, res) => {
       ...r,
       // A path the app can load. Without it the asker is asked to judge
       // evidence they cannot see.
-      evidenceUrl: r.evidenceKey ? storage.urlFor(String(r.evidenceKey)) : null,
+      /**
+       * Every file from the attempt, plus the first of them on its own.
+       *
+       * `evidenceUrl` stays because a card, a thumbnail and a share sheet all
+       * want one representative image and should not each pick their own. The
+       * array is what the viewer opens, so two photos sent are two photos seen.
+       */
+      evidenceUrls: evidenceUrls(r.evidenceKeys),
+      evidenceUrl: evidenceUrls(r.evidenceKeys)[0] ?? null,
       minutesLeft: minutesLeft(r.dispatchedAt as Date | null, r.deadlineMinutes as number),
     })),
   });
@@ -517,7 +538,7 @@ questionsRouter.post('/:id/accept', authenticate, async (req, res) => {
    * arrive is a minute the asker is not getting an answer and nobody else can
    * take it either.
    */
-  const { lat, lng } = req.body ?? {};
+  const { lat, lng, where } = req.body ?? {};
   const here =
     typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)
       ? { lat, lng }
@@ -534,7 +555,28 @@ questionsRouter.post('/:id/accept', authenticate, async (req, res) => {
   if (question.placeLat !== null && question.placeLng !== null) {
     const away = metresBetween(here, { lat: question.placeLat, lng: question.placeLng });
 
-    if (away > ACCEPT_RADIUS_M) {
+    /**
+     * A place can be a point or an area, and the radius only suits one.
+     *
+     * "NNPC Ikeja" is a forecourt and 5km around it means what it says.
+     * "Oredo" is a local government area some 20km across, stored as its
+     * centroid — so somebody standing in Oredo measured 11km from Oredo and
+     * was refused a job they were plainly at.
+     *
+     * The distance test is kept for the places it fits, and the name of where
+     * the phone says it is answers for the rest. Both come from the same GPS
+     * fix, so this admits nobody the radius would have kept out for real:
+     * faking the area means faking the coordinates it was derived from.
+     */
+    const inTheArea =
+      typeof where === 'string' &&
+      where.trim().length > 0 &&
+      question.placeText
+        .split(/[\s,]+/)
+        .filter((word) => word.length > 3)
+        .some((word) => where.toLowerCase().includes(word));
+
+    if (away > ACCEPT_RADIUS_M && !inTheArea) {
       const km = Math.round(away / 100) / 10;
       res.status(403).json({
         error: 'too_far',
@@ -654,6 +696,28 @@ questionsRouter.post('/:id/submit', authenticate, async (req, res) => {
 
     await client.query(
       `UPDATE tasks SET status = 'submitted', submitted_at = now() WHERE id = $1`,
+      [task.id],
+    );
+
+    /**
+     * Records that this went out over the gate's objection.
+     *
+     * Derived, never reported: the client sends no flag for this, and is not
+     * asked to. The attempt row and its verdict were written by the gate
+     * itself when it ran, so marking the newest one is a statement about what
+     * this server computed rather than about what a phone claims. A modified
+     * client can still skip the gate entirely — it has always been able to —
+     * but it cannot make an attempt this server failed look like one it passed.
+     *
+     * `verdict <> 'pass'` covers the warning override too, which had gone
+     * unrecorded since it was added. The verdict stays on the row, so a
+     * reviewer can tell a shrugged-off warning from an ignored failure.
+     */
+    await client.query(
+      `UPDATE submission_attempts SET overridden = TRUE
+        WHERE task_id = $1
+          AND verdict <> 'pass'
+          AND attempt = (SELECT max(attempt) FROM submission_attempts WHERE task_id = $1)`,
       [task.id],
     );
   });
@@ -969,7 +1033,7 @@ questionsRouter.get('/disputes/mine', authenticate, async (req, res) => {
             q.id AS "questionId", q.body AS question, q.bounty_kobo AS "bountyKobo",
             pl.name AS "placeName",
             asker.username AS "askerName", verifier.username AS "verifierName",
-            e.kind::text AS "evidenceKind", e.storage_key AS "evidenceKey",
+            e.kind::text AS "evidenceKind", e.keys AS "evidenceKeys",
             a.body AS answer,
             CASE WHEN q.asker_id = $1 THEN 'asker' ELSE 'verifier' END AS role
        FROM disputes d
@@ -978,10 +1042,7 @@ questionsRouter.get('/disputes/mine', authenticate, async (req, res) => {
        LEFT JOIN profiles asker ON asker.user_id = q.asker_id
        LEFT JOIN tasks t ON t.id = d.task_id
        LEFT JOIN profiles verifier ON verifier.user_id = t.verifier_id
-       LEFT JOIN LATERAL (
-         SELECT kind, storage_key FROM evidence
-          WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
-       ) e ON TRUE
+       ${LATEST_EVIDENCE}
        -- What the verifier actually wrote. Both parties are arguing about it,
        -- so both need to be able to read it back.
        LEFT JOIN LATERAL (
@@ -996,7 +1057,15 @@ questionsRouter.get('/disputes/mine', authenticate, async (req, res) => {
   res.json({
     disputes: rows.map((r) => ({
       ...r,
-      evidenceUrl: r.evidenceKey ? storage.urlFor(String(r.evidenceKey)) : null,
+      /**
+       * Every file from the attempt, plus the first of them on its own.
+       *
+       * `evidenceUrl` stays because a card, a thumbnail and a share sheet all
+       * want one representative image and should not each pick their own. The
+       * array is what the viewer opens, so two photos sent are two photos seen.
+       */
+      evidenceUrls: evidenceUrls(r.evidenceKeys),
+      evidenceUrl: evidenceUrls(r.evidenceKeys)[0] ?? null,
     })),
   });
 });
@@ -1179,8 +1248,14 @@ questionsRouter.post('/:id/dispute', authenticate, async (req, res) => {
     return;
   }
 
-  const job = await one<{ taskId: string | null; askerId: string }>(
-    `SELECT t.id AS "taskId", q.asker_id AS "askerId"
+  const job = await one<{
+    taskId: string | null;
+    askerId: string;
+    verifierId: string | null;
+    body: string;
+  }>(
+    `SELECT t.id AS "taskId", q.asker_id AS "askerId",
+            t.verifier_id AS "verifierId", q.body
        FROM questions q LEFT JOIN tasks t ON t.question_id = q.id
       WHERE q.id = $1`,
     [req.params.id],
@@ -1216,6 +1291,25 @@ questionsRouter.post('/:id/dispute', authenticate, async (req, res) => {
       return;
     }
     res.status(201).json({ ok: true, id: created });
+
+    /**
+     * The verifier is told their answer is being questioned.
+     *
+     * Nothing told them at all, which left the one person the flow is now
+     * waiting on as the only person unaware it had moved: they had walked
+     * somewhere, sent evidence, and their job silently changed state. The
+     * reply window is theirs to use and they could only find it by opening
+     * the app and noticing.
+     */
+    if (job.verifierId) {
+      void notify({
+        userId: job.verifierId,
+        kind: 'dispute',
+        title: 'Your answer was queried',
+        body: `${job.body.slice(0, 60)} — say what you saw and a reviewer decides.`,
+        href: '/disputes',
+      });
+    }
   } catch (error) {
     res.status(500).json({
       error: 'dispute_failed',
@@ -1249,4 +1343,26 @@ questionsRouter.post('/:id/dispute/reply', authenticate, async (req, res) => {
     return;
   }
   res.json({ ok: true });
+
+  /**
+   * And the asker learns there is something to read.
+   *
+   * They raised the query, so they are waiting on exactly this — and the
+   * dispute moves to the reviewer at the same moment, which is worth knowing
+   * before they chase it.
+   */
+  void (async () => {
+    const q = await one<{ askerId: string; body: string }>(
+      `SELECT asker_id AS "askerId", body FROM questions WHERE id = $1`,
+      [req.params.id],
+    );
+    if (!q) return;
+    await notify({
+      userId: q.askerId,
+      kind: 'dispute',
+      title: 'The verifier replied',
+      body: `${q.body.slice(0, 60)} — a reviewer is looking at it now.`,
+      href: `/tracking/${req.params.id}`,
+    });
+  })();
 });

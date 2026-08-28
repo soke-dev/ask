@@ -36,7 +36,7 @@ export const config = {
   databaseUrl: process.env.DATABASE_URL ?? '',
 
   /** Where uploads land. See storage.ts — the disk driver is dev-only. */
-  storageDriver: (process.env.STORAGE_DRIVER ?? 'disk') as 'disk',
+  storageDriver: (process.env.STORAGE_DRIVER ?? 'disk') as 'disk' | 'volume' | 'object',
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 
   /**

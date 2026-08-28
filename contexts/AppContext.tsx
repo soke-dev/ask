@@ -141,6 +141,14 @@ export type Query = {
   taskStatus?: string | null;
   disputeStatus?: string | null;
   /**
+   * Set when the verifier sent the evidence over a check that objected.
+   *
+   * Carried to the asker because they are the one being asked to accept the
+   * answer: the machine had a problem with it, and the person deciding whether
+   * to pay is entitled to know that before they decide.
+   */
+  sentPastCheck?: 'warn' | 'fail' | null;
+  /**
    * Who took the job, once somebody has.
    *
    * Carried for the same reason taskStatus is: the asker's device cannot work
@@ -233,7 +241,14 @@ export type Dispute = {
   verifierName: string;
   verifierReply: string | null;
   /** What the verifier sent, so an admin can judge without leaving the page. */
-  evidence: { kind: 'photo' | 'video'; detail: string };
+  /**
+   * `detail` is the representative file; `urls` is all of them.
+   *
+   * Kept as two fields because a locally-raised dispute has a detail and no
+   * server row yet, and dropping that would blank the evidence on the screen
+   * of the person who just raised it.
+   */
+  evidence: { kind: 'photo' | 'video'; detail: string; urls?: string[] };
   status: DisputeStatus;
   adminNote: string | null;
   createdAt: number;
@@ -707,7 +722,7 @@ type AppContextType = {
   abandonTask: (taskId: string) => Promise<{ ok: boolean; detail?: string }>;
   acceptTask: (
     taskId: string,
-    at: { lat: number; lng: number },
+    at: { lat: number; lng: number; where?: string | null },
   ) => Promise<{ ok: boolean; detail?: string }>;
   completeTask: (taskId: string, reward: number, description: string) => void;
 };
@@ -1207,6 +1222,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         evidence: {
           kind: d.evidenceKind ?? 'photo',
           detail: d.evidenceUrl ?? '',
+          urls: d.evidenceUrls,
         },
         status: d.status as DisputeStatus,
         adminNote: d.adminNote,
@@ -1350,6 +1366,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         taskStatus: q.taskStatus,
         verifierName: q.verifierName,
         disputeStatus: q.disputeStatus,
+        sentPastCheck: q.sentPastCheck,
         /**
          * The server's own created_at, not the dispatch time.
          *
@@ -1931,7 +1948,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ]);
   }, []);
 
-  const acceptTask = useCallback(async (taskId: string, at: { lat: number; lng: number }) => {
+  const acceptTask = useCallback(
+    async (taskId: string, at: { lat: number; lng: number; where?: string | null }) => {
     /**
      * Claim it on the server first.
      *
