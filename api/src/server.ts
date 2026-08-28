@@ -1,6 +1,6 @@
 import cors from 'cors';
 import express from 'express';
-import { config, hasAdmin, hasDatabase, hasGasWallet, hasPrivy, hasVision } from './config.js';
+import { config, hasAdmin, hasAgents, hasDatabase, hasGasWallet, hasPrivy, hasVision } from './config.js';
 import { query } from './db.js';
 import { evidenceRouter } from './routes/evidence.js';
 import { authRouter } from './routes/auth.js';
@@ -8,6 +8,7 @@ import { adminRouter } from './routes/admin.js';
 import { identityRouter } from './routes/identity.js';
 import { withdrawRouter } from './routes/withdraw.js';
 import { questionsRouter } from './routes/questions.js';
+import { agentRouter } from './routes/agent.js';
 import { tidyRouter } from './routes/tidy.js';
 import { pushRouter } from './routes/push.js';
 import { escrowRouter } from './routes/escrow.js';
@@ -90,6 +91,7 @@ app.get('/health', async (_req, res) => {
     auth: hasPrivy() ? 'privy' : 'not_configured',
     admin: hasAdmin() ? 'password_set' : 'not_configured',
     vision: hasVision() ? 'configured' : 'not_configured',
+    agents: hasAgents() ? 'enabled' : 'off',
     storage: storageIsEphemeral
       ? 'disk (development only — files are lost on deploy)'
       : config.storageDriver,
@@ -109,6 +111,8 @@ app.use('/tidy', tidyRouter);
 app.use('/push', pushRouter);
 app.use('/withdraw', withdrawRouter);
 app.use('/questions', questionsRouter);
+// Programs, not phones. The router 404s wholesale when AGENTS_ENABLED is off.
+app.use('/agent', agentRouter);
 app.use('/escrow', escrowRouter);
 app.use('/evidence', evidenceRouter);
 

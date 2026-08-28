@@ -37,6 +37,19 @@ export const config = {
 
   /** Where uploads land. See storage.ts — the disk driver is dev-only. */
   storageDriver: (process.env.STORAGE_DRIVER ?? 'disk') as 'disk' | 'volume' | 'object',
+
+  agents: {
+    /**
+     * One switch for the whole agent surface. Anything added for agents hangs
+     * off this, so turning it off is a decision that can be made in one place
+     * by somebody who does not remember what was built.
+     */
+    enabled: (process.env.AGENTS_ENABLED ?? '').toLowerCase() === 'true',
+    /** What an agent pays when an existing answer is reused instead of a trip. */
+    cachedFeeKobo: num('AGENT_CACHED_FEE_KOBO', 5_000),
+    /** How old a verified answer can be before it is no longer worth reusing. */
+    maxAgeMinutes: num('AGENT_MAX_AGE_MINUTES', 120),
+  },
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 
   /**
@@ -187,6 +200,15 @@ export const config = {
 } as const;
 
 export const hasDatabase = () => config.databaseUrl.length > 0;
+/**
+ * Whether this server answers to programs as well as to people.
+ *
+ * Off by default, and off means gone: the /agent routes 404, keys cannot be
+ * minted or used, and the app behaves exactly as it did before any of it
+ * existed. Built that way on purpose — the agent surface is a bet, and a bet
+ * you cannot withdraw from is a liability rather than an experiment.
+ */
+export const hasAgents = () => config.agents.enabled;
 export const hasPrivy = () =>
   config.privy.appId.length > 0 && config.privy.appSecret.length > 0;
 export const hasVision = () => config.visionKey.length > 0;

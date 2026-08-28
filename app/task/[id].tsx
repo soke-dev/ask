@@ -410,7 +410,27 @@ export default function TaskScreen() {
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: media === 'video' ? ['videos'] : ['images'],
+        // Photos only — the picker ignores this for video, which is how a
+        // 30-second clip was arriving at 11MB while photos came in at 389KB.
         quality: 0.7,
+        /**
+         * 720p rather than whatever the phone can manage.
+         *
+         * The default is High, so an iPhone recorded 1080p and the verifier
+         * uploaded it from wherever they were standing. Nigerian mobile data
+         * is charged by the megabyte and the upload happens in the street, so
+         * the cost of the default lands on the person least able to avoid it
+         * — and then again on the asker who downloads it.
+         *
+         * 720p is far more than enough to see whether a road is flooded or a
+         * shop is open, and the gate measures sharpness on a 640px copy, so
+         * nothing downstream can tell the difference.
+         *
+         * iOS only. Android takes whatever its camera app produces, and
+         * needs a server-side transcode to match — see the note in
+         * routes/evidence.ts.
+         */
+        videoQuality: ImagePicker.UIImagePickerControllerQualityType.IFrame1280x720,
         videoMaxDuration: MAX_VIDEO_SECONDS,
       });
 
