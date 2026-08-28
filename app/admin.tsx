@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
+  Linking,
   Platform,
   Pressable,
   RefreshControl,
@@ -15,6 +17,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
+import { mediaUrl } from '@/utils/api';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import {
   deleteUser,
   deskLogin,
@@ -34,6 +38,14 @@ import {
   type Overview,
   decideIdentity,
 } from '@/utils/adminApi';
+import {
+  connectWallet,
+  currentAccount,
+  fetchArbiter,
+  onAccountChanged,
+  shortAddress,
+  walletAvailable,
+} from '@/utils/adminWallet';
 
 /**
  * The review desk.
@@ -70,6 +82,40 @@ export default function AdminScreen() {
   const [search, setSearch] = useState('');
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  /**
+   * The reviewer's own wallet.
+   *
+   * Rulings are signed here rather than on the server, so the arbiter key stays
+   * with the person doing the reviewing. The desk password gets you in to read;
+   * moving money needs the wallet the contract names.
+   */
+  const [wallet, setWalletAddress] = useState<string | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+
+  // Read from the contract, not from a build-time variable that can go stale
+  // the moment the owner changes the arbiter.
+  const [arbiterAddress, setArbiterAddress] = useState<string | null>(null);
+  const isArbiter = Boolean(wallet) && Boolean(arbiterAddress) && wallet === arbiterAddress;
+
+  useEffect(() => {
+    void currentAccount().then(setWalletAddress);
+    void fetchArbiter().then(setArbiterAddress);
+    return onAccountChanged(setWalletAddress);
+  }, []);
+
+  async function connect() {
+    setConnecting(true);
+    setWalletError(null);
+    const result = await connectWallet();
+    setConnecting(false);
+    if (!result.ok) {
+      setWalletError(result.detail);
+      return;
+    }
+    setWalletAddress(result.address);
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -164,7 +210,7 @@ export default function AdminScreen() {
   if (!unlocked) {
     return (
       <View style={[styles.screen, { backgroundColor: colors.background }]}>
-        <ScrollView
+        <KeyboardAwareScrollViewCompat
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[styles.scroll, { paddingTop: topPad }]}
         >
@@ -234,7 +280,7 @@ export default function AdminScreen() {
               {signingIn ? 'Checking' : 'Unlock'}
             </Text>
           </Pressable>
-        </ScrollView>
+        </KeyboardAwareScrollViewCompat>
       </View>
     );
   }
@@ -242,7 +288,7 @@ export default function AdminScreen() {
   // ── Unlocked ─────────────────────────────────────────────────────────────
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -266,6 +312,70 @@ export default function AdminScreen() {
         <Text style={[text.display, { color: colors.foreground, marginTop: 18 }]}>
           Review desk
         </Text>
+
+        {/* The wallet, stated plainly. Reading the desk needs the password;
+            moving money needs the address the contract names as arbiter. */}
+        <View
+          style={[
+            styles.walletBar,
+            { borderColor: wallet ? (isArbiter ? colors.primary : colors.pending) : colors.border },
+          ]}
+        >
+          <Ionicons
+            name={wallet ? (isArbiter ? 'shield-checkmark' : 'alert-circle') : 'wallet-outline'}
+            size={16}
+            color={wallet ? (isArbiter ? colors.primary : colors.pending) : colors.mutedForeground}
+          />
+
+          <View style={{ flex: 1 }}>
+            {wallet ? (
+              <>
+                <Text style={[text.data, { color: colors.foreground }]}>
+                  {shortAddress(wallet)}
+                </Text>
+                <Text
+                  style={[
+                    text.data,
+                    { color: isArbiter ? colors.primary : colors.pending },
+                  ]}
+                >
+                  {isArbiter
+                    ? 'Arbiter · can settle disputes'
+                    : arbiterAddress
+                      ? 'Not the arbiter · rulings will be rejected'
+                      : 'Arbiter address unknown · cannot check'}
+                </Text>
+              </>
+            ) : (
+              <Text style={[text.data, { color: colors.mutedForeground }]}>
+                {walletAvailable()
+                  ? 'No wallet connected'
+                  : 'No wallet extension in this browser'}
+              </Text>
+            )}
+          </View>
+
+          {!wallet && walletAvailable() && (
+            <Pressable
+              onPress={connect}
+              disabled={connecting}
+              style={({ pressed }) => [
+                styles.connectBtn,
+                { backgroundColor: colors.foreground, opacity: pressed || connecting ? 0.8 : 1 },
+              ]}
+            >
+              <Text style={[text.data, { color: colors.background }]}>
+                {connecting ? 'Connecting' : 'Connect'}
+              </Text>
+            </Pressable>
+          )}
+        </View>
+
+        {walletError && (
+          <Text style={[text.bodySmall, { color: colors.danger, marginTop: 8 }]}>
+            {walletError}
+          </Text>
+        )}
 
         {error && (
           <View style={[styles.errorRow, { borderColor: colors.danger }]}>
@@ -629,7 +739,28 @@ export default function AdminScreen() {
               </Text>
             )}
             {disputes.map((d) => {
-              const ready = d.status === 'awaiting_admin';
+              /**
+               * Decidable from the moment it exists, not only once the
+               * verifier has replied.
+               *
+               * This waited for 'awaiting_admin', so a verifier who simply
+               * never answered left the money held forever and the desk with
+               * no button to end it. The reply is useful, not required — a
+               * reviewer can already see the evidence and the objection, and
+               * somebody has to be able to end a stalemate.
+               */
+              const undecided = !d.status.startsWith('resolved');
+
+              /**
+               * Deciding moves money on chain, so the arbiter wallet has to be
+               * connected first.
+               *
+               * Without this the desk offered Pay verifier and Refund on a
+               * reviewer who had connected nothing — the database would record
+               * a decision the contract could never carry out, and the two
+               * would disagree about who held the bounty with no way back.
+               */
+              const ready = undecided && isArbiter;
               const decided = d.status.startsWith('resolved');
               return (
                 <View
@@ -671,6 +802,40 @@ export default function AdminScreen() {
                     </Text>
                   </View>
 
+                  {/* The evidence itself, whatever stage this is at. A
+                      reviewer asked to judge a photo they cannot see is being
+                      asked to take the objection on trust. */}
+                  {d.evidenceUrl && (
+                    <View style={[styles.side, { borderColor: colors.borderStrong }]}>
+                      <Text style={[text.data, { color: colors.faintForeground }]}>
+                        evidence · {d.evidenceKind ?? 'file'}
+                        {d.capturedAt ? ` · ${new Date(d.capturedAt).toLocaleString()}` : ''}
+                      </Text>
+                      {d.evidenceKind === 'video' ? (
+                        <Text
+                          onPress={() => {
+                            const url = mediaUrl(d.evidenceUrl);
+                            if (url) void Linking.openURL(url);
+                          }}
+                          style={[text.action, { color: colors.accent, marginTop: 6 }]}
+                        >
+                          Open the video
+                        </Text>
+                      ) : (
+                        <Image
+                          source={{ uri: mediaUrl(d.evidenceUrl) ?? undefined }}
+                          style={styles.evidenceShot}
+                          resizeMode="cover"
+                        />
+                      )}
+                      {d.answer && (
+                        <Text style={[text.bodySmall, { color: colors.foreground, marginTop: 8 }]}>
+                          “{d.answer}”
+                        </Text>
+                      )}
+                    </View>
+                  )}
+
                   {d.verifierReply && (
                     <View style={[styles.side, { borderColor: colors.primary }]}>
                       <Text style={[text.data, { color: colors.primary }]}>
@@ -686,6 +851,21 @@ export default function AdminScreen() {
                     <Text style={[text.bodySmall, { color: colors.mutedForeground }]}>
                       Reviewer: {d.adminNote}
                     </Text>
+                  )}
+
+                  {undecided && !isArbiter && (
+                    <View style={[styles.side, { borderColor: colors.pending }]}>
+                      <Text style={[text.data, { color: colors.pending }]}>
+                        {wallet
+                          ? 'that wallet is not the arbiter'
+                          : 'connect the arbiter wallet to decide'}
+                      </Text>
+                      <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 3 }]}>
+                        {wallet
+                          ? 'The contract only accepts the arbiter address. Switch accounts and reconnect.'
+                          : 'A decision releases the bounty on chain, so it has to be signed by the arbiter.'}
+                      </Text>
+                    </View>
                   )}
 
                   {ready && (
@@ -730,14 +910,32 @@ export default function AdminScreen() {
             })}
           </>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  // Big enough to judge, not so big the queue becomes a gallery.
+  // Taller on the desk than it would be on a phone: this is the picture the
+  // whole decision turns on, and 190px was a thumbnail.
+  evidenceShot: { width: '100%', height: 420, borderRadius: 2, marginTop: 8 },
   screen: { flex: 1 },
-  scroll: { paddingHorizontal: 20, paddingBottom: 44 },
+  /**
+   * Centred and capped rather than edge to edge.
+   *
+   * Unframing the route hands the desk the whole browser window, and a line of
+   * text running the width of a 27" monitor is unreadable. 1100 is wide enough
+   * for the evidence to be judged at a useful size and for the objection to
+   * sit beside it, and narrow enough to still be a column.
+   */
+  scroll: {
+    paddingHorizontal: 20,
+    paddingBottom: 44,
+    width: '100%',
+    maxWidth: 1100,
+    alignSelf: 'center',
+  },
   bar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   backBtn: {
     width: 38,
@@ -806,6 +1004,16 @@ const styles = StyleSheet.create({
   deleteLink: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
   confirmRow: { flexDirection: 'row', gap: 9, marginTop: 6 },
   smallBtn: { borderRadius: 2, paddingHorizontal: 12, paddingVertical: 9 },
+  walletBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    borderWidth: 2,
+    borderRadius: 2,
+    padding: 12,
+    marginTop: 16,
+  },
+  connectBtn: { borderRadius: 2, paddingHorizontal: 13, paddingVertical: 8 },
   errorRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',

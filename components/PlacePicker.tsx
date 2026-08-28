@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import { useColors } from '@/hooks/useColors';
+import { SheetKeyboardView } from '@/components/SheetKeyboardView';
 import { font, text } from '@/constants/type';
 import type { Place } from '@/contexts/AppContext';
 import {
@@ -23,9 +24,9 @@ import {
   providerLabel,
   resolvePlace,
   reverseLookup,
-  searchKnownPlaces,
   searchPlaces,
 } from '@/utils/places';
+import { useApp } from '@/contexts/AppContext';
 
 type Props = {
   visible: boolean;
@@ -49,7 +50,31 @@ export function PlacePicker({ visible, onClose, onSelect }: Props) {
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
 
-  const [results, setResults] = useState<Place[]>(() => searchKnownPlaces(''));
+  /**
+   * Starts with places this person has asked about, not a fixed list.
+   *
+   * The default used to be nine Lagos landmarks that everyone saw as "Saved
+   * places" — a new account in Kano opened this picker to a list of filling
+   * stations in Ikeja it had never seen and could not walk to.
+   */
+  const { recentPlaces } = useApp();
+  const [results, setResults] = useState<Place[]>(recentPlaces);
+
+  /**
+   * Re-seed the list each time the sheet opens.
+   *
+   * `useState(recentPlaces)` is an initial value and nothing more. This sheet
+   * mounts with the screen behind it, long before the questions it derives
+   * from have loaded — so it captured an empty list on the first render and
+   * kept it, and "Where you asked before" was permanently blank no matter how
+   * many places had been asked about.
+   *
+   * Guarded on an empty query so it cannot wipe search results out from under
+   * somebody who is typing.
+   */
+  useEffect(() => {
+    if (visible && query.trim() === '') setResults(recentPlaces);
+  }, [visible, recentPlaces, query]);
   const [searching, setSearching] = useState(false);
   const [live, setLive] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -167,151 +192,169 @@ export function PlacePicker({ visible, onClose, onSelect }: Props) {
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
       <Pressable style={[styles.backdrop, { backgroundColor: colors.overlay }]} onPress={onClose}>
-        <Pressable
-          onPress={(e) => e.stopPropagation()}
-          style={[
-            styles.sheet,
-            {
-              backgroundColor: colors.background,
-              borderColor: colors.borderStrong,
-              paddingBottom: (Platform.OS === 'web' ? 20 : insets.bottom) + 20,
-            },
-          ]}
-        >
-          <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
-
-          <Text style={[text.title, { color: colors.foreground }]}>Where should we check?</Text>
-          <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 4 }]}>
-            Someone has to walk to this spot, so be as exact as you can.
-          </Text>
-
-          <View
+        {/*
+         * The sheet is anchored to the bottom of the screen, so a focused
+         * search field sat directly behind the keyboard: the field, the
+         * result list and the Use-my-location button were all covered.
+         *
+         * See SheetKeyboardView for why this is not React Native's own
+         * KeyboardAvoidingView — inside a Modal on Android that one has
+         * nothing to work with.
+         */}
+        <SheetKeyboardView style={styles.lift}>
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
             style={[
-              styles.search,
-              { backgroundColor: colors.surface, borderColor: colors.borderStrong },
+              styles.sheet,
+              {
+                backgroundColor: colors.background,
+                borderColor: colors.borderStrong,
+                paddingBottom: (Platform.OS === 'web' ? 20 : insets.bottom) + 20,
+              },
             ]}
           >
-            <Ionicons name="search" size={16} color={colors.faintForeground} />
-            <TextInput
-              style={[styles.searchInput, { color: colors.foreground }]}
-              placeholder="Station, market, shop, street…"
-              placeholderTextColor={colors.faintForeground}
-              value={query}
-              onChangeText={setQuery}
-              autoCorrect={false}
-              returnKeyType="search"
-            />
-            {searching ? (
-              <ActivityIndicator size="small" color={colors.faintForeground} />
-            ) : trimmed.length > 0 ? (
-              <Pressable onPress={() => setQuery('')} hitSlop={8}>
-                <Ionicons name="close-circle" size={16} color={colors.faintForeground} />
-              </Pressable>
-            ) : null}
-          </View>
+            <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
 
-          {/* Say where the results come from — a saved list and a live search
-              behave differently and the user should not have to guess. */}
-          <View style={styles.sourceRow}>
+            <Text style={[text.title, { color: colors.foreground }]}>Where should we check?</Text>
+            <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 4 }]}>
+              Someone has to walk to this spot, so be as exact as you can.
+            </Text>
+
             <View
               style={[
-                styles.sourceDot,
-                { backgroundColor: live ? colors.primary : colors.faintForeground },
+                styles.search,
+                { backgroundColor: colors.surface, borderColor: colors.borderStrong },
               ]}
-            />
-            <Text style={[text.data, { color: colors.faintForeground, flex: 1 }]}>
-              {searchError
-                ? searchError
-                : live
-                  ? `Searching ${providerLabel[placesProvider]}`
-                  : hasLivePlaces
-                    ? 'Saved places'
-                    : 'Saved places · set a provider for live search'}
-            </Text>
-          </View>
+            >
+              <Ionicons name="search" size={16} color={colors.faintForeground} />
+              <TextInput
+                style={[styles.searchInput, { color: colors.foreground }]}
+                placeholder="Station, market, shop, street…"
+                placeholderTextColor={colors.faintForeground}
+                value={query}
+                onChangeText={setQuery}
+                autoCorrect={false}
+                returnKeyType="search"
+              />
+              {searching ? (
+                <ActivityIndicator size="small" color={colors.faintForeground} />
+              ) : trimmed.length > 0 ? (
+                <Pressable onPress={() => setQuery('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={16} color={colors.faintForeground} />
+                </Pressable>
+              ) : null}
+            </View>
 
-          <Pressable
-            onPress={useCurrentLocation}
-            disabled={locating}
-            style={({ pressed }) => [
-              styles.currentBtn,
-              { borderColor: colors.accent, opacity: pressed ? 0.7 : 1 },
-            ]}
-          >
-            {locating ? (
-              <ActivityIndicator size="small" color={colors.accent} />
-            ) : (
-              <Ionicons name="navigate" size={16} color={colors.accent} />
-            )}
-            <Text style={[text.action, { color: colors.accent }]}>
-              {locating ? 'Finding you' : 'Use my current location'}
-            </Text>
-          </Pressable>
-
-          {locationError && (
-            <Text style={[text.bodySmall, { color: colors.danger, marginTop: 8 }]}>
-              {locationError}
-            </Text>
-          )}
-
-          <ScrollView
-            style={styles.list}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {showFreeform && (
-              <Pressable
-                onPress={() =>
-                  choose({
-                    id: `free-${Date.now()}`,
-                    name: trimmed,
-                    area: 'Typed by you',
-                    freeform: true,
-                  })
-                }
-                style={({ pressed }) => [
-                  styles.row,
-                  { borderBottomColor: colors.border, opacity: pressed ? 0.6 : 1 },
+            {/* Say where the results come from — a saved list and a live search
+                behave differently and the user should not have to guess. */}
+            <View style={styles.sourceRow}>
+              <View
+                style={[
+                  styles.sourceDot,
+                  { backgroundColor: live ? colors.primary : colors.faintForeground },
                 ]}
-              >
-                <Ionicons name="add-circle-outline" size={17} color={colors.primary} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[text.subheading, { color: colors.foreground }]}>
-                    Use “{trimmed}”
-                  </Text>
-                  <Text style={[text.data, { color: colors.faintForeground }]}>
-                    Not on our list
-                  </Text>
-                </View>
-              </Pressable>
-            )}
+              />
+              <Text style={[text.data, { color: colors.faintForeground, flex: 1 }]}>
+                {searchError
+                  ? searchError
+                  : live
+                    ? `Searching ${providerLabel[placesProvider]}`
+                    : hasLivePlaces
+                      ? 'Where you asked before'
+                      : 'Where you asked before · set a provider for live search'}
+              </Text>
+            </View>
 
-            {results.map((place) => (
-              <Pressable
-                key={place.id}
-                onPress={() => choose(place)}
-                style={({ pressed }) => [
-                  styles.row,
-                  { borderBottomColor: colors.border, opacity: pressed ? 0.6 : 1 },
-                ]}
-              >
-                <Ionicons name="location-outline" size={17} color={colors.mutedForeground} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[text.subheading, { color: colors.foreground }]}>{place.name}</Text>
-                  <Text style={[text.data, { color: colors.faintForeground }]}>{place.area}</Text>
-                </View>
-              </Pressable>
-            ))}
+            <Pressable
+              onPress={useCurrentLocation}
+              disabled={locating}
+              style={({ pressed }) => [
+                styles.currentBtn,
+                { borderColor: colors.accent, opacity: pressed ? 0.7 : 1 },
+              ]}
+            >
+              {locating ? (
+                <ActivityIndicator size="small" color={colors.accent} />
+              ) : (
+                <Ionicons name="navigate" size={16} color={colors.accent} />
+              )}
+              <Text style={[text.action, { color: colors.accent }]}>
+                {locating ? 'Finding you' : 'Use my current location'}
+              </Text>
+            </Pressable>
 
-            {results.length === 0 && !showFreeform && !searching && (
-              <Text style={[text.bodySmall, { color: colors.faintForeground, paddingVertical: 20 }]}>
-                Nothing matches that yet. Keep typing to use it as written.
+            {locationError && (
+              <Text style={[text.bodySmall, { color: colors.danger, marginTop: 8 }]}>
+                {locationError}
               </Text>
             )}
-          </ScrollView>
-        </Pressable>
+
+            <ScrollView
+              style={styles.list}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {showFreeform && (
+                <Pressable
+                  onPress={() =>
+                    choose({
+                      id: `free-${Date.now()}`,
+                      name: trimmed,
+                      area: 'Typed by you',
+                      freeform: true,
+                    })
+                  }
+                  style={({ pressed }) => [
+                    styles.row,
+                    { borderBottomColor: colors.border, opacity: pressed ? 0.6 : 1 },
+                  ]}
+                >
+                  <Ionicons name="add-circle-outline" size={17} color={colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[text.subheading, { color: colors.foreground }]}>
+                      Use “{trimmed}”
+                    </Text>
+                    <Text style={[text.data, { color: colors.faintForeground }]}>
+                      Not on our list
+                    </Text>
+                  </View>
+                </Pressable>
+              )}
+
+              {results.map((place) => (
+                <Pressable
+                  key={place.id}
+                  onPress={() => choose(place)}
+                  style={({ pressed }) => [
+                    styles.row,
+                    { borderBottomColor: colors.border, opacity: pressed ? 0.6 : 1 },
+                  ]}
+                >
+                  <Ionicons name="location-outline" size={17} color={colors.mutedForeground} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[text.subheading, { color: colors.foreground }]}>{place.name}</Text>
+                    <Text style={[text.data, { color: colors.faintForeground }]}>{place.area}</Text>
+                  </View>
+                </Pressable>
+              ))}
+
+              {results.length === 0 && !showFreeform && !searching && (
+                <Text style={[text.bodySmall, { color: colors.faintForeground, paddingVertical: 20 }]}>
+                  Nothing matches that yet. Keep typing to use it as written.
+                </Text>
+              )}
+            </ScrollView>
+          </Pressable>
+        </SheetKeyboardView>
       </Pressable>
     </Modal>
   );
@@ -319,6 +362,14 @@ export function PlacePicker({ visible, onClose, onSelect }: Props) {
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'flex-end' },
+  /**
+   * Fills the backdrop rather than hugging its content, because the sheet is
+   * capped with maxHeight: '88%'. A percentage resolves against the parent, so
+   * a content-sized wrapper would leave it measuring against nothing — and
+   * once the keyboard is up this is the box that shrinks, which is exactly
+   * what that 88% should be a share of.
+   */
+  lift: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     borderTopWidth: 2,
     borderLeftWidth: 2,

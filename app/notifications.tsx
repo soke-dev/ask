@@ -45,8 +45,18 @@ export default function NotificationsScreen() {
 
   function open(item: AppNotification) {
     markNotificationRead(item.id);
-    // Jobs live on Earn; money and identity live on You. Answers would deep
-    // link to their tracking screen once questions are persisted server-side.
+
+    /**
+     * Straight to the thing it is about.
+     *
+     * The server sends the exact route — a tracking screen, a job, the
+     * disputes list. Falling back to a tab only when it did not, rather than
+     * always landing on one and leaving the person to find it.
+     */
+    if (item.href) {
+      router.push(item.href as Parameters<typeof router.push>[0]);
+      return;
+    }
     if (item.kind === 'job') router.push('/(tabs)/earn');
     else if (item.kind === 'payment' || item.kind === 'identity') router.push('/(tabs)/you');
   }

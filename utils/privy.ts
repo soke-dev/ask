@@ -88,8 +88,19 @@ export function useEmailLogin(): EmailLogin {
       setError(null);
       setPendingEmail(email);
       try {
+        if (__DEV__) console.log('[auth] requesting a code for', email);
         await sendCode({ email });
+        // Privy accepted it. Anything after this is deliverability, not the app.
+        if (__DEV__) console.log('[auth] Privy accepted the request — code sent');
       } catch (cause) {
+        /**
+         * The raw message, before readableAuthError rewrites it.
+         *
+         * That mapping is right for the person signing in and wrong for
+         * anybody debugging: "Could not reach the network" and a rejected app
+         * client read identically on screen.
+         */
+        if (__DEV__) console.warn('[auth] sendCode failed:', cause);
         setError(readableAuthError(cause));
         throw cause;
       }

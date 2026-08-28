@@ -1,0 +1,222 @@
+import { apiFetch, hasApi } from './api';
+
+/**
+ * The Ask and Earn loop, over the wire.
+ *
+ * Amounts cross in kobo and are converted once, here, so no screen has to
+ * remember which side of the boundary it is on.
+ */
+const toNaira = (kobo: number): number => kobo / 100;
+
+export type ServerQuestion = {
+  id: string;
+  text: string;
+  bountyKobo: number;
+  deadlineMinutes: number;
+  /** When the question was asked. The only field History can order on. */
+  createdAt: string;
+  dispatchedAt: string | null;
+  closedAt: string | null;
+  verifiedOnly: boolean;
+  visibility: 'public' | 'private';
+  placeName: string | null;
+  area: string | null;
+  state: string | null;
+  taskId: string | null;
+  taskStatus: string | null;
+  verifierName: string | null;
+  answer: string | null;
+  evidenceKind: 'photo' | 'video' | null;
+  /** Server path to the file, ready to be made absolute with mediaUrl(). */
+  evidenceUrl: string | null;
+  distanceMetres: number | null;
+  disputeStatus: string | null;
+  minutesLeft: number;
+};
+
+export type ServerJob = {
+  id: string;
+  text: string;
+  bountyKobo: number;
+  deadlineMinutes: number;
+  verifiedOnly: boolean;
+  placeName: string | null;
+  area: string | null;
+  state: string | null;
+  askerName: string | null;
+  category: 'fuel' | 'food' | 'traffic' | 'shopping' | 'safety';
+  minutesLeft: number;
+};
+
+export type ServerAnswered = {
+  id: string;
+  text: string;
+  area: string;
+  state: string;
+  proof: 'photo' | 'video';
+  confirmed: boolean;
+  ago: string;
+};
+
+export type ServerNotification = {
+  kind: string;
+  id: string;
+  at: string;
+  title: string;
+  body: string | null;
+  href: string | null;
+};
+
+export type DispatchInput = {
+  text: string;
+  placeName: string;
+  area: string | null;
+  state: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  bounty: number;
+  deadlineMinutes: number;
+  visibility: 'public' | 'private';
+  verifiedOnly: boolean;
+};
+
+export const dispatchQuestion = (input: DispatchInput) =>
+  /**
+   * `needsFunding` is true when an escrow contract is configured. The question
+   * exists but is not yet a job anybody can see — funding it is what
+   * dispatches it.
+   */
+  apiFetch<{ id: string; createdAt: string; needsFunding: boolean }>('/questions', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export const myQuestions = () => apiFetch<{ questions: ServerQuestion[] }>('/questions/mine');
+
+export const nearbyJobs = (area?: string) =>
+  apiFetch<{ jobs: ServerJob[] }>(`/questions/nearby${area ? `?area=${encodeURIComponent(area)}` : ''}`);
+
+/** Jobs this person has taken. Never in the nearby list — that excludes them. */
+export type ServerDispute = {
+  id: string;
+  status: string;
+  askerReason: string;
+  verifierReply: string | null;
+  adminNote: string | null;
+  createdAt: string;
+  questionId: string;
+  question: string;
+  bountyKobo: number;
+  placeName: string | null;
+  askerName: string | null;
+  verifierName: string | null;
+  evidenceKind: 'photo' | 'video' | null;
+  evidenceUrl: string | null;
+  /** What the verifier wrote when they sent the evidence. */
+  answer: string | null;
+  /** Which side of it you are on, decided by the server from the rows. */
+  role: 'asker' | 'verifier';
+};
+
+/** Disputes you are a party to, either side. */
+export const myDisputes = () =>
+  apiFetch<{ disputes: ServerDispute[] }>('/questions/disputes/mine');
+
+export const takenJobs = () =>
+  apiFetch<{
+    jobs: (ServerJob & {
+      taskId: string;
+      taskStatus: string;
+      answer: string | null;
+      /** Null when the on-chain claim never landed — no claim, no payment. */
+      claimTx: string | null;
+      chainJobId: string | null;
+    })[];
+  }>('/questions/taken');
+
+export const answeredNearby = () => apiFetch<{ answered: ServerAnswered[] }>('/questions/answered');
+
+/**
+ * Takes a job, and proves where you were when you took it.
+ *
+ * The coordinates are not optional decoration: the server refuses the job
+ * without them, because "I am near this place" is the one claim it cannot take
+ * on trust from a device.
+ */
+export const acceptJob = (id: string, at: { lat: number; lng: number }) =>
+  apiFetch<{ taskId: string }>(`/questions/${id}/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ lat: at.lat, lng: at.lng }),
+  });
+
+export const submitAnswer = (
+  id: string,
+  input: {
+    answer: string;
+    evidenceKind?: 'photo' | 'video';
+    storageKey?: string;
+    lat?: number | null;
+    lng?: number | null;
+    distanceMetres?: number | null;
+  },
+) => apiFetch<{ ok: true }>(`/questions/${id}/submit`, { method: 'POST', body: JSON.stringify(input) });
+
+export const confirmAnswer = (id: string) =>
+  apiFetch<{ ok: true; paidKobo: number }>(`/questions/${id}/confirm`, { method: 'POST' });
+
+export const closeQuestion = (id: string) =>
+  apiFetch<{ ok: true; refundedKobo: number }>(`/questions/${id}/close`, { method: 'POST' });
+
+export const fetchNotifications = () =>
+  apiFetch<{ notifications: ServerNotification[] }>('/questions/notifications');
+
+export type CachedAnswerPayload = {
+  question: string;
+  answer: string;
+  placeName: string;
+  area: string | null;
+  proof: 'photo' | 'video';
+  hoursOld: number;
+};
+
+export const cachedAnswerFor = (place: string) =>
+  apiFetch<{ answer: CachedAnswerPayload | null }>(
+    `/questions/cached?place=${encodeURIComponent(place)}`,
+  );
+
+export { hasApi, toNaira };
+
+/** Records a query against an answer, so a reviewer can see it. */
+export const openDisputeOnServer = (id: string, reason: string) =>
+  apiFetch<{ ok: true; id: string }>(`/questions/${id}/dispute`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+
+/**
+ * Corrects the writing in a question, without changing what it asks.
+ *
+ * Returns the text unchanged when the server has no model configured, so a
+ * caller can treat "no change" and "nothing needed" as the same outcome and
+ * fall back to the local pass either way.
+ */
+export const tidyOnServer = (text: string) =>
+  apiFetch<{ text: string; changed: boolean; limited?: boolean }>('/tidy', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  });
+
+/** Hands a job back to the board. The verifier's own escape hatch. */
+export const abandonJob = (id: string) =>
+  apiFetch<{ ok: true }>(`/questions/${id}/abandon`, { method: 'POST' });
+
+/** Back on the board, clock restarted. The asker's alternative to a refund. */
+export const relistQuestion = (id: string) =>
+  apiFetch<{ ok: true }>(`/questions/${id}/relist`, { method: 'POST' });
+
+/** The verifier's side of it. */
+export const replyToDisputeOnServer = (id: string, reply: string) =>
+  apiFetch<{ ok: true }>(`/questions/${id}/dispute/reply`, {
+    method: 'POST',
+    body: JSON.stringify({ reply }),
+  });

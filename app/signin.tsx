@@ -1,10 +1,8 @@
 import React, { useRef, useState } from 'react';
 import {
   Animated,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -18,6 +16,7 @@ import { useThemeMode } from '@/contexts/ThemeContext';
 import { font, text } from '@/constants/type';
 import { useApp } from '@/contexts/AppContext';
 import { useEmailLogin, privyConfigured } from '@/utils/privy';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 
 function isValidEmail(e: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim());
@@ -101,13 +100,21 @@ export default function SignInScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
+    <View style={[styles.screen, { backgroundColor: colors.background }]}>
+      {/*
+       * KeyboardAvoidingView only shrank the screen; it never moved the
+       * focused field. The email input sits high enough to survive that, but
+       * the six-digit code is further down the page and ended up behind the
+       * keypad — you could type a code you could not read.
+       *
+       * KeyboardAwareScrollView scrolls whatever has focus into view instead,
+       * which is the behaviour this screen actually needed. It has been in the
+       * tree since KeyboardProvider went into the root layout, just unused.
+       */}
+      <KeyboardAwareScrollViewCompat
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        bottomOffset={24}
         contentContainerStyle={[
           styles.scroll,
           {
@@ -297,8 +304,8 @@ export default function SignInScreen() {
             By continuing you agree to our Terms and Privacy Policy.
           </Text>
         </Animated.View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAwareScrollViewCompat>
+    </View>
   );
 }
 

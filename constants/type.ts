@@ -1,7 +1,7 @@
 import { TextStyle } from 'react-native';
 
 /**
- * Ask Nearby — "Signal" typography.
+ * Confam — "Signal" typography.
  *
  * Two voices, taken from how signage actually works:
  *   Barlow        — a grotesk with a direct transit-signage lineage. Carries

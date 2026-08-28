@@ -90,9 +90,19 @@ authRouter.get('/me', authenticate, async (req, res) => {
 /** Claims a username. Case-insensitive unique, so two people cannot share one. */
 authRouter.patch('/me', authenticate, async (req, res) => {
   const user = req.user!;
-  const body = req.body as { username?: unknown; homeArea?: unknown; homeState?: unknown };
+  const body = req.body as {
+    username?: unknown;
+    homeArea?: unknown;
+    homeState?: unknown;
+    homeCountry?: unknown;
+  };
 
-  const patch: { username?: string; homeArea?: string; homeState?: string } = {};
+  const patch: {
+    username?: string;
+    homeArea?: string;
+    homeState?: string;
+    homeCountry?: string;
+  } = {};
 
   if (body.username !== undefined) {
     const username = String(body.username)
@@ -106,6 +116,7 @@ authRouter.patch('/me', authenticate, async (req, res) => {
     patch.username = username;
   }
   if (typeof body.homeArea === 'string') patch.homeArea = body.homeArea.slice(0, 120);
+  if (typeof body.homeCountry === 'string') patch.homeCountry = body.homeCountry.slice(0, 80);
   if (typeof body.homeState === 'string') patch.homeState = body.homeState.slice(0, 120);
 
   try {
@@ -114,10 +125,17 @@ authRouter.patch('/me', authenticate, async (req, res) => {
           SET username     = COALESCE($2, username),
               home_area    = COALESCE($3, home_area),
               home_state   = COALESCE($4, home_state),
+              home_country = COALESCE($5, home_country),
               onboarded_at = COALESCE(onboarded_at, now()),
               updated_at   = now()
         WHERE user_id = $1`,
-      [user.id, patch.username ?? null, patch.homeArea ?? null, patch.homeState ?? null],
+      [
+        user.id,
+        patch.username ?? null,
+        patch.homeArea ?? null,
+        patch.homeState ?? null,
+        patch.homeCountry ?? null,
+      ],
     );
   } catch (error) {
     // 23505 is unique_violation — the only failure a caller can act on.
@@ -302,16 +320,21 @@ authRouter.get('/wallet', authenticate, async (req, res) => {
   );
 
   /**
-   * Holds and tips leave the balance; everything else adds to it. Pending
-   * entries are excluded — money that has not settled is not spendable, and
-   * showing it as available is how someone tries to withdraw what is not there.
+   * Money out is anything that leaves the wallet: a bounty held, a tip sent,
+   * the platform's cut, a withdrawal to another address.
+   *
+   * This list used to name only holds and tips, which meant a fee *added* to
+   * the balance and a withdrawal made you richer. Both are outflows, and the
+   * omission was worth real money in the wrong direction.
    */
+  const OUTFLOWS = new Set(['hold', 'tip', 'fee', 'withdrawal']);
+
+  // Pending entries are excluded — money that has not settled is not
+  // spendable, and showing it as available is how someone tries to withdraw
+  // what is not there.
   const balanceKobo = entries
     .filter((e) => !e.pending)
-    .reduce(
-      (sum, e) => (e.kind === 'hold' || e.kind === 'tip' ? sum - e.amountKobo : sum + e.amountKobo),
-      0,
-    );
+    .reduce((sum, e) => (OUTFLOWS.has(e.kind) ? sum - e.amountKobo : sum + e.amountKobo), 0);
 
   res.json({
     balanceKobo,

@@ -211,13 +211,30 @@ export async function runEvidenceGate(input: GateInput): Promise<EvidenceReport>
     form.append('targetLat', String(input.target.lat));
     form.append('targetLng', String(input.target.lng));
   }
-  input.files.forEach((file, i) => {
-    form.append('files', {
-      uri: file.uri,
-      name: input.kind === 'video' ? `clip-${i}.mp4` : `photo-${i}.jpg`,
-      type: input.kind === 'video' ? 'video/mp4' : 'image/jpeg',
-    } as unknown as Blob);
-  });
+  /**
+   * Attaching a file means two different things on the two platforms.
+   *
+   * React Native accepts `{ uri, name, type }` and streams the file itself.
+   * A browser does not: FormData.append stringifies a plain object, so this
+   * sent the literal text "[object Object]" and multer saw no files at all.
+   * Every web submission was answered `no_files`, the gate degraded to
+   * "not checked", and the photo was never stored — which is why the asker
+   * was shown "No image sent" for evidence somebody had actually taken.
+   *
+   * On web the blob: URL has to be fetched back into bytes first. Same
+   * approach as uploadAvatar, which had the same problem.
+   */
+  for (const [i, file] of input.files.entries()) {
+    const name = input.kind === 'video' ? `clip-${i}.mp4` : `photo-${i}.jpg`;
+    const type = input.kind === 'video' ? 'video/mp4' : 'image/jpeg';
+
+    if (file.uri.startsWith('blob:') || file.uri.startsWith('data:')) {
+      const blob = await fetch(file.uri).then((r) => r.blob());
+      form.append('files', blob, name);
+    } else {
+      form.append('files', { uri: file.uri, name, type } as unknown as Blob);
+    }
+  }
 
   const result = await apiFetch<EvidenceReport>('/evidence/check', { method: 'POST', body: form });
 

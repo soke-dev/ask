@@ -20,16 +20,18 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as Location from 'expo-location';
 import { Image } from 'expo-image';
 import { useColors } from '@/hooks/useColors';
+import { taskPhase } from '@/utils/taskPhase';
+import { useDialog } from '@/contexts/DialogContext';
+import { useNow } from '@/hooks/useNow';
 import { font, text } from '@/constants/type';
 import { useApp } from '@/contexts/AppContext';
+import { submitAnswer, takenJobs } from '@/utils/questionsApi';
+import { claimJob, escrowAvailable } from '@/utils/escrowApi';
+import { useSignAuthorization } from '@/utils/privy';
 import { FEE_PERCENT, PLATFORM_FEE } from '@/constants/money';
 import { hasApi } from '@/utils/api';
-import {
-  MAX_ATTEMPTS,
-  runEvidenceGate,
-  type EvidenceCheck,
-  type EvidenceReport,
-} from '@/utils/evidenceChecks';
+import { MAX_ATTEMPTS, distanceMetres, runEvidenceGate, type EvidenceCheck, type EvidenceReport } from '@/utils/evidenceChecks';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 
 type PageState =
   | 'detail'
@@ -39,6 +41,8 @@ type PageState =
   | 'ai_checking'
   | 'check_result'
   | 'pending_asker'
+  /** The asker objected. Nothing to do but reply and wait for a reviewer. */
+  | 'queried'
   | 'earned';
 type MediaChoice = 'photo' | 'video' | null;
 
@@ -161,19 +165,91 @@ function CheckRow({
 
 export default function TaskScreen() {
   const colors = useColors();
+  const { confirm, notify } = useDialog();
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { nearbyTasks, acceptTask, completeTask, identity, queries } = useApp();
+  const { nearbyTasks, myJobs, acceptTask, abandonTask, identity, queries } = useApp();
   const topPad = Platform.OS === 'web' ? 22 : insets.top + 6;
 
-  const task = nearbyTasks.find((t) => t.id === id);
+  /**
+   * Looked up in both lists.
+   *
+   * A job leaves `nearbyTasks` the moment it is accepted — /questions/nearby
+   * only returns what is still open — so reading that list alone showed "this
+   * job is gone" to the one person who had just taken it.
+   */
+  /**
+   * The taken copy first, the open board second.
+   *
+   * Both lists can hold the same job for a moment after it is accepted, but
+   * only the taken copy carries `taskId` — /questions/nearby has no task to
+   * report. Searching the board first meant the job was always found without
+   * one, so evidence was checked and never filed against anything.
+   */
+  const task = myJobs.find((t) => t.id === id) ?? nearbyTasks.find((t) => t.id === id);
 
-  const [pageState, setPageState] = useState<PageState>(
-    task?.status === 'accepted' ? 'form' : 'detail',
-  );
-  const [expiry, setExpiry] = useState(task?.expiresIn ?? 600);
+  /**
+   * Where to open, from what the server says has already happened.
+   *
+   * A submitted job used to land back on the accept screen, asking somebody to
+   * go and do a job they had already done — and offering them the chance to
+   * submit a second time.
+   */
+  const [pageState, setPageState] = useState<PageState>('detail');
+
+  /**
+   * Corrects the screen once the job actually loads.
+   *
+   * The state cannot be worked out at first render — `myJobs` arrives from the
+   * server a moment later — so an initialiser ran against an undefined task,
+   * settled on the accept screen, and stayed there. A verifier who had already
+   * submitted was asked to go and do the job again.
+   *
+   * Only ever moves forward, and only from `detail`: somebody midway through
+   * capturing must not be yanked elsewhere by a poll landing.
+   */
+  const alignedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    const status = task?.serverStatus;
+    if (!status || pageState !== 'detail') return;
+    if (alignedFor.current === `${id}:${status}`) return;
+    alignedFor.current = `${id}:${status}`;
+
+    /**
+     * Every phase gets a destination, so a status this switch has not met
+     * cannot quietly land on the evidence form. That is precisely how a
+     * queried job came to ask the verifier to photograph the place twice.
+     */
+    switch (taskPhase(status)) {
+      case 'settled':
+        setPageState('earned');
+        break;
+      case 'delivered':
+        setPageState('pending_asker');
+        break;
+      case 'queried':
+        setPageState('queried');
+        break;
+      case 'working':
+        setPageState('form');
+        break;
+      // 'open' and 'expired' are not this screen's to move: the job is not
+      // theirs any more, and the detail view says so on its own.
+      default:
+        break;
+    }
+  }, [task?.serverStatus, pageState, id]);
+  /**
+   * Remaining time is always `expiresAt - now`, so reopening the screen cannot
+   * restart it. The clock comes from a shared hook rather than a local
+   * counter, which is what used to reset.
+   */
+  const now = useNow(task?.expiresAt);
   const [startIn, setStartIn] = useState(30);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [deliverError, setDeliverError] = useState<string | null>(null);
+  const signAuthorization = useSignAuthorization();
   const [media, setMedia] = useState<MediaChoice>(null);
   const [shots, setShots] = useState<Shot[]>([]);
   const [tipsOpen, setTipsOpen] = useState(false);
@@ -185,11 +261,7 @@ export default function TaskScreen() {
   const [report, setReport] = useState<EvidenceReport | null>(null);
   const [attempt, setAttempt] = useState(0);
 
-  useEffect(() => {
-    if (pageState !== 'detail' && pageState !== 'form') return;
-    const t = setInterval(() => setExpiry((c) => Math.max(0, c - 1)), 1000);
-    return () => clearInterval(t);
-  }, [pageState]);
+  const msLeft = Math.max(0, (task?.expiresAt ?? 0) - now);
 
   useEffect(() => {
     if (pageState !== 'detail') return;
@@ -200,14 +272,34 @@ export default function TaskScreen() {
     return () => clearInterval(t);
   }, [pageState]);
 
+  /**
+   * The window is a commitment, not a delay before the camera.
+   *
+   * Running out used to open the evidence form by itself — so a job nobody had
+   * confirmed they were walking to stayed locked to them for the whole
+   * deadline while the asker waited on somebody who might have put their phone
+   * down. Not confirming now gives the job back, which is what "if you do not
+   * start in time" on the screen above has always said it would do.
+   */
   useEffect(() => {
     if (pageState !== 'countdown') return;
+
     if (startIn <= 0) {
-      setPageState('form');
+      void (async () => {
+        await abandonTask(task!.id);
+        await notify({
+          title: 'Job released',
+          message: 'You did not confirm in time, so it has gone back to the board for somebody else.',
+        });
+        router.replace('/(tabs)/earn');
+      })();
       return;
     }
+
     const t = setInterval(() => setStartIn((c) => c - 1), 1000);
     return () => clearInterval(t);
+    // task and the dialog are stable for the life of this screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageState, startIn]);
 
   if (!task) {
@@ -236,10 +328,12 @@ export default function TaskScreen() {
   const yourCut = Math.round(task.reward * (1 - PLATFORM_FEE));
   const fee = task.reward - yourCut;
   const categoryTint = {
+    housing: colors.catHousing,
     fuel: colors.catFuel,
     food: colors.catFood,
     traffic: colors.catTraffic,
     shopping: colors.catShopping,
+    other: colors.catOther,
     safety: colors.catSafety,
   }[task.category];
 
@@ -347,11 +441,111 @@ export default function TaskScreen() {
       placeName: task!.location,
       captured: coords,
       target: targetCoords,
+      /**
+       * Without this the endpoint checks the file and keeps nothing.
+       *
+       * Storing is what the task id switches on — it is the row the evidence
+       * is filed against. Omitting it meant a verifier walked somewhere, took
+       * a photo, passed the checks, and the asker was shown "No image sent".
+       */
+      taskId: task!.taskId,
     });
 
+    /**
+     * Loud when the evidence had nowhere to go.
+     *
+     * Without a task id the endpoint checks the file and keeps nothing, and
+     * the failure is otherwise invisible — the verifier sees a passing gate
+     * and the asker later sees "No image sent". Better to know here.
+     */
+    if (!task!.taskId) {
+      console.warn('[deliver] no taskId on this job — the evidence was checked but not stored');
+    }
+
     setReport(result);
-    setPageState(result.verdict === 'pass' ? 'pending_asker' : 'check_result');
+
+    if (result.verdict === 'pass') {
+      await deliver();
+      return;
+    }
+    setPageState('check_result');
   }
+
+  /**
+   * Hands the answer over: to the server, then to the contract.
+   *
+   * Server first. The answer and the evidence are what the asker actually
+   * reads, and they must survive even if the chain call fails — an on-chain
+   * claim against an answer nobody can see helps no one.
+   *
+   * The claim is what records the payee before any dispute can exist. Without
+   * it, resolution would need something to supply the verifier's address, and
+   * whatever supplied it could name an address of its own choosing.
+   */
+  async function deliver() {
+    setPageState('ai_checking');
+    setDeliverError(null);
+
+    const written = Object.values(answers).find((v) => v.trim().length > 0) ?? '';
+
+    const submitted = await submitAnswer(task!.id, {
+      answer: written || 'Evidence attached.',
+      evidenceKind: media === 'video' ? 'video' : 'photo',
+      lat: coords?.lat ?? null,
+      lng: coords?.lng ?? null,
+      distanceMetres:
+        coords && targetCoords ? Math.round(distanceMetres(coords, targetCoords)) : null,
+    });
+
+    if (!submitted.ok) {
+      setDeliverError(`Your answer did not send — ${submitted.detail}`);
+      setPageState('check_result');
+      return;
+    }
+
+    // On-chain only when the job was funded there. A ledger-only job is
+    // complete at this point and must not be held up waiting for a signature.
+    if (await escrowAvailable()) {
+      const claimed = await claimJob(task!.id, shots[0]?.uri ?? task!.id, signAuthorization);
+      if (!claimed.ok && claimed.code !== 'not_funded') {
+        // Not fatal: the answer is delivered and the asker can see it. Say so
+        // rather than implying the work was lost.
+        setDeliverError(
+          claimed.code === 'declined'
+            ? 'Your answer was sent. You will need to sign before you can be paid.'
+            : `Your answer was sent, but the on-chain claim failed — ${claimed.detail}`,
+        );
+      }
+    }
+
+    setPageState('pending_asker');
+  }
+
+  /**
+   * Watches for the asker's decision.
+   *
+   * The only honest route to "you earned" — a verifier learns they were paid
+   * because the payment happened, not because they tapped a button on their
+   * own device.
+   */
+  useEffect(() => {
+    if (pageState !== 'pending_asker' || !hasApi) return;
+
+    let stopped = false;
+    const check = async () => {
+      const result = await takenJobs();
+      if (!result.ok || stopped) return;
+      const mine = result.data.jobs.find((j) => j.id === task?.id);
+      if (mine?.taskStatus === 'confirmed') setPageState('earned');
+    };
+
+    void check();
+    const timer = setInterval(check, 10_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [pageState, task?.id]);
 
   /** Sends the verifier back to the capture form to try again. */
   function retake() {
@@ -368,30 +562,99 @@ export default function TaskScreen() {
     if (task!.verifiedOnly && identity.status !== 'verified') return;
 
     tap(Haptics.ImpactFeedbackStyle.Heavy);
-    acceptTask(task!.id);
+
+    /**
+     * Find out where we are *before* claiming the job.
+     *
+     * This ran the other way round — accept, then locate — which cannot work
+     * now that being there is the condition of taking it. It also meant a
+     * refusal arrived after the screen had already moved on, so the job looked
+     * taken for a moment and then quietly was not.
+     */
     setPageState('locating');
+
+    let at: { lat: number; lng: number } | null = null;
+    /**
+     * Held locally as well as in state, because a refusal has to name it in
+     * the same tick. `setPlace` will not have landed by the time the server
+     * answers, so reading the state here would show the previous value.
+     */
+    let whereIAm: string | null = null;
+
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
         const loc = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
-        setCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+        at = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+        setCoords(at);
         try {
           const [geo] = await Location.reverseGeocodeAsync({
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
+            latitude: at.lat,
+            longitude: at.lng,
           });
-          setPlace(geo?.district ?? geo?.city ?? 'Current location');
+          // District, then city, then the coordinates themselves — something
+          // recognisable if we have it, and something checkable if not.
+          whereIAm =
+            [geo?.district, geo?.city, geo?.region].filter(Boolean).join(', ') ||
+            `${at.lat.toFixed(4)}, ${at.lng.toFixed(4)}`;
         } catch {
-          setPlace(`${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`);
+          whereIAm = `${at.lat.toFixed(4)}, ${at.lng.toFixed(4)}`;
         }
+        setPlace(whereIAm);
       } else {
         setPlace('Location not shared');
       }
     } catch {
       setPlace('Location unavailable');
     }
+
+    /**
+     * Back to the job detail, not the evidence form.
+     *
+     * 'form' is the capture screen. Sending a refused verifier there put them
+     * in front of a camera for a job they had just been told they could not
+     * take — and any evidence they then sent would have had no task to attach
+     * to. 'detail' is the page they pressed the button on.
+     */
+    if (!at) {
+      setPageState('detail');
+      await notify({
+        title: 'Location needed',
+        message:
+          'We check you are at the place before you take a job. Turn location on and try again.',
+      });
+      return;
+
+    }
+
+    const taken = await acceptTask(task!.id, at);
+    if (!taken.ok) {
+      // The job may well still be theirs to take — from somewhere else.
+      setPageState('detail');
+      await notify({
+        /**
+         * Say where they are, not only how far off they are.
+         *
+         * "You are about 254.3km away" is true and unhelpful on its own — it
+         * gives no way to tell a genuine refusal from a bad GPS fix. Naming
+         * the place the phone thinks it is in makes the difference obvious.
+         */
+        title: 'Cannot take this one',
+        message: [
+          taken.detail ?? 'Try again in a moment.',
+          whereIAm ? `Your phone puts you in ${whereIAm}.` : null,
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+      });
+      // Back to the board they were browsing, rather than leaving them on a
+      // job they have just been told is not theirs to take.
+      router.replace('/(tabs)/earn');
+      return;
+    }
+
     setPageState('countdown');
   }
 
@@ -413,13 +676,33 @@ export default function TaskScreen() {
         <Text
           style={[text.bodySmall, { color: colors.mutedForeground, textAlign: 'center', maxWidth: 280 }]}
         >
-          Paid out on Base. The {FEE_PERCENT} platform fee has already been taken off.
+          {/* Says what happened, without asserting the on-chain transfer has
+              confirmed. The asker's release is what pays; whether that
+              transaction has settled is a separate question, and the wallet
+              answers it. */}
+          The asker confirmed your answer. The {FEE_PERCENT} platform fee has been taken off, and
+          the rest is on its way to your wallet.
         </Text>
+        <Pressable
+          onPress={() => router.replace('/(tabs)/you')}
+          style={({ pressed }) => [
+            styles.wideBtn,
+            {
+              borderWidth: 2,
+              borderColor: colors.border,
+              opacity: pressed ? 0.8 : 1,
+              marginTop: 30,
+            },
+          ]}
+        >
+          <Text style={[text.action, { color: colors.foreground }]}>Check my wallet</Text>
+        </Pressable>
+
         <Pressable
           onPress={() => router.replace('/(tabs)/earn')}
           style={({ pressed }) => [
             styles.wideBtn,
-            { backgroundColor: colors.foreground, opacity: pressed ? 0.88 : 1, marginTop: 30 },
+            { backgroundColor: colors.foreground, opacity: pressed ? 0.88 : 1, marginTop: 10 },
           ]}
         >
           <Text style={[text.action, { color: colors.background }]}>Find another job</Text>
@@ -546,7 +829,7 @@ export default function TaskScreen() {
                 <Pressable
                   onPress={() => {
                     tap(Haptics.ImpactFeedbackStyle.Medium);
-                    setPageState('pending_asker');
+                    void deliver();
                   }}
                   style={({ pressed }) => [
                     styles.wideBtn,
@@ -626,15 +909,17 @@ export default function TaskScreen() {
           </View>
 
           <Text style={[text.bodySmall, { color: colors.faintForeground, marginTop: 16 }]}>
-            If the asker queries your answer, a person reviews both sides before anything is
+            If the asker queries your answer, support reviews both sides before anything is
             reversed.
           </Text>
 
+          {/* Acknowledges the message, nothing more.
+              This used to credit the verifier's ledger and jump to "you
+              earned ₦450 · paid out on Base" — while the asker had not even
+              seen the answer. Payment happens when they confirm, and this
+              screen finds out by asking the server. */}
           <Pressable
-            onPress={() => {
-              completeTask(task!.id, yourCut, `${task!.title} · ${task!.location}`);
-              setPageState('earned');
-            }}
+            onPress={() => router.back()}
             style={({ pressed }) => [
               styles.wideBtn,
               { backgroundColor: colors.foreground, opacity: pressed ? 0.88 : 1, marginTop: 26 },
@@ -646,6 +931,47 @@ export default function TaskScreen() {
       </View>
     );
   }
+
+  // ── Queried ───────────────────────────────────────────────────────────────
+  if (pageState === 'queried') {
+    return (
+      <View style={[styles.screen, { backgroundColor: colors.background }]}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[styles.scroll, { paddingTop: topPad }]}
+        >
+          <View style={styles.bar}>
+            <Pressable
+              onPress={() => router.back()}
+              style={[styles.backBtn, { borderColor: colors.border }]}
+            >
+              <Ionicons name="arrow-back" size={18} color={colors.foreground} />
+            </Pressable>
+          </View>
+
+          <Text style={[text.label, { color: colors.pending, marginTop: 18 }]}>Queried</Text>
+          <Text style={[text.display, { color: colors.foreground, marginTop: 6 }]}>
+            The asker disagreed.
+          </Text>
+          <Text style={[text.body, { color: colors.mutedForeground, marginTop: 10 }]}>
+            {task?.title ?? 'This job'} is with a reviewer now. Your evidence has already been
+            sent to them — you do not need to go back or take anything again.
+          </Text>
+
+          {/* Said plainly, because the alternative reading is that the work
+              was thrown away. It has not been; it is being looked at. */}
+          <View style={[styles.pendingNote, { borderColor: colors.pending }]}>
+            <Ionicons name="hourglass-outline" size={15} color={colors.pending} />
+            <Text style={[text.bodySmall, { color: colors.pending, flex: 1 }]}>
+              The money stays held until a reviewer decides. If they side with you, it is paid
+              out as normal.
+            </Text>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
 
   // ── Locating ──────────────────────────────────────────────────────────────
   if (pageState === 'locating') {
@@ -719,6 +1045,7 @@ export default function TaskScreen() {
           </View>
 
           <Pressable
+            /* Locks it in: the countdown stops mattering from here. */
             onPress={() => setPageState('form')}
             style={({ pressed }) => [
               styles.wideBtn,
@@ -735,11 +1062,12 @@ export default function TaskScreen() {
   }
 
   // ── Detail + form ─────────────────────────────────────────────────────────
-  const urgent = expiry < 120;
+  // Under two minutes, measured against the deadline rather than a counter.
+  const urgent = msLeft < 2 * 60_000;
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.scroll, { paddingTop: topPad }]}
@@ -760,7 +1088,7 @@ export default function TaskScreen() {
             <Text
               style={[text.dataMedium, { color: urgent ? colors.danger : colors.mutedForeground }]}
             >
-              {clock(expiry)}
+              {clock(Math.floor(msLeft / 1000))}
             </Text>
           </View>
         </View>
@@ -776,6 +1104,13 @@ export default function TaskScreen() {
             <Text style={[text.subheading, { color: colors.mutedForeground, marginTop: 8 }]}>
               {task.location}
             </Text>
+            {/* An address alone is ambiguous across Nigeria — there is an
+                Airport Road in Lagos, Abuja and Benin City. */}
+            {(task.area || task.state) && (
+              <Text style={[text.data, { color: colors.accent, marginTop: 3 }]}>
+                {[task.area, task.state].filter(Boolean).join(', ')}
+              </Text>
+            )}
 
             <Text style={[text.body, { color: colors.foreground, marginTop: 20, fontSize: 15.5 }]}>
               {task.description}
@@ -801,7 +1136,7 @@ export default function TaskScreen() {
                   <Text style={{ color: colors.foreground, fontFamily: font.sansMedium }}>
                     {task.askerName}
                   </Text>
-                  . You will not need to contact them.
+.
                 </Text>
               </View>
             )}
@@ -1077,9 +1412,52 @@ export default function TaskScreen() {
                 {shots.length ? `Send it · claim ₦${yourCut}` : 'Add proof to send'}
               </Text>
             </Pressable>
+
+            {/*
+              * A way out that is not the deadline.
+              *
+              * Taking a job locks it to you, and until now the only ways to
+              * let go of one you could not do were to sit on it until the
+              * clock ran out or to send something worthless. Both waste the
+              * asker's window; this hands it straight back to somebody who
+              * can go. Offered only before any evidence exists — once you
+              * have sent something, the asker owes you a decision on it.
+              */}
+            {shots.length === 0 && (
+              <Pressable
+                onPress={() => {
+                  void (async () => {
+                    const sure = await confirm({
+                      title: 'Give this job back?',
+                      message:
+                        'It goes back on the board for somebody else to take, and you will not be paid for it.',
+                      confirmLabel: 'Give it back',
+                      cancelLabel: 'Keep it',
+                      tone: 'danger',
+                    });
+                    if (!sure) return;
+
+                    const given = await abandonTask(task!.id);
+                    if (!given.ok) {
+                      await notify({
+                        title: 'Could not give it back',
+                        message: given.detail ?? 'Try again in a moment.',
+                      });
+                      return;
+                    }
+                    router.replace('/(tabs)/earn');
+                  })();
+                }}
+                style={styles.giveBack}
+              >
+                <Text style={[text.action, { color: colors.mutedForeground }]}>
+                  Give this job back
+                </Text>
+              </Pressable>
+            )}
           </>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
 
       {/* ── How to capture it ──────────────────────────────────────
           Shown before the camera opens. The video rule is the important
@@ -1176,6 +1554,18 @@ export default function TaskScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  // Row of icon + sentence, used by the queried screen to say where the money
+  // is without it reading as an error.
+  giveBack: { alignItems: 'center', paddingVertical: 16, marginTop: 4 },
+  pendingNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 9,
+    borderWidth: 2,
+    borderRadius: 2,
+    padding: 13,
+    marginTop: 20,
+  },
   scroll: { paddingHorizontal: 20, paddingBottom: 44 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 8 },
 

@@ -17,29 +17,10 @@ import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
-import { AREAS, useApp, type Area, type Place } from '@/contexts/AppContext';
+import { useApp, type Area } from '@/contexts/AppContext';
 import { apiFetch, hasApi, uploadAvatar } from '@/utils/api';
-import {
-  hasLivePlaces,
-  localityOf,
-  placesProvider,
-  providerLabel,
-  searchPlaces,
-} from '@/utils/places';
-
-/**
- * A searched place becomes the area you live in: its name is the town, and
- * the tail of its address is the state. Falls back to the country so the
- * field is never blank.
- */
-function areaFromPlace(place: Place): Area {
-  return {
-    key: `custom-${place.id}`,
-    label: place.name,
-    state: localityOf(place) ?? 'Nigeria',
-  };
-}
-
+import { AreaPicker, type AreaChoice } from '@/components/AreaPicker';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 const USERNAME_RULE = /^[a-z0-9_]{3,20}$/;
 
 export default function EditProfileScreen() {
@@ -56,12 +37,6 @@ export default function EditProfileScreen() {
   const [photoError, setPhotoError] = useState<string | null>(null);
 
   const [areaOpen, setAreaOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Place[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-
-  const trimmed = query.trim();
   const usernameValid = USERNAME_RULE.test(username);
   const canSave = usernameValid;
 
@@ -70,33 +45,6 @@ export default function EditProfileScreen() {
 
   const initials = (username || user?.email || 'U').slice(0, 2).toUpperCase();
 
-  // Same debounce-and-abort shape as the place picker: a slow reply for an
-  // earlier keystroke must never land on top of a newer one.
-  useEffect(() => {
-    if (!areaOpen || !hasLivePlaces || trimmed.length < 2) {
-      setResults([]);
-      setSearching(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    let cancelled = false;
-    setSearching(true);
-
-    const timer = setTimeout(async () => {
-      const outcome = await searchPlaces(trimmed, { signal: controller.signal });
-      if (cancelled || controller.signal.aborted) return;
-      setResults(outcome.places);
-      setSearchError(outcome.error ?? null);
-      setSearching(false);
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [trimmed, areaOpen]);
 
   async function pickPhoto(fromCamera: boolean) {
     setPhotoError(null);
@@ -168,6 +116,7 @@ export default function EditProfileScreen() {
           username: username.trim(),
           homeArea: area.label,
           homeState: area.state,
+          homeCountry: 'Nigeria',
         }),
       });
       setSaving(false);
@@ -189,7 +138,7 @@ export default function EditProfileScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.scroll, { paddingTop: topPad }]}
@@ -356,7 +305,7 @@ export default function EditProfileScreen() {
 
         {/* ── Area ─────────────────────────────────────────────────── */}
         <Text style={[text.label, styles.fieldLabel, { color: colors.faintForeground }]}>
-          Your area
+          Location
         </Text>
         <Pressable
           onPress={() => setAreaOpen(true)}
@@ -403,10 +352,23 @@ export default function EditProfileScreen() {
             {saveError}
           </Text>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
 
       {/* ── Area sheet ─────────────────────────────────────────────── */}
-      <Modal visible={areaOpen} transparent animationType="slide" onRequestClose={() => setAreaOpen(false)}>
+      {/* ── Where they are ─────────────────────────────────────────
+          The same country → state → area picker as onboarding.
+
+          It used to search live place data through a geocoding provider,
+          which answered a different question: a search for "Ikeja" returns
+          streets and businesses, and the app needs the local government area
+          the jobs are filtered by. A fixed list of the 774 LGAs cannot return
+          something that is not one. */}
+      <Modal
+        visible={areaOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAreaOpen(false)}
+      >
         <Pressable
           style={[styles.backdrop, { backgroundColor: colors.overlay }]}
           onPress={() => setAreaOpen(false)}
@@ -423,120 +385,24 @@ export default function EditProfileScreen() {
             ]}
           >
             <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
-            <Text style={[text.title, { color: colors.foreground }]}>Where do you live?</Text>
+            <Text style={[text.title, { color: colors.foreground }]}>Select location</Text>
             <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 4 }]}>
-              Search any town or city, or pick one below.
+              Where you take jobs and see questions.
             </Text>
 
-            <View
-              style={[
-                styles.search,
-                { backgroundColor: colors.surface, borderColor: colors.borderStrong },
-              ]}
-            >
-              <Ionicons name="search" size={16} color={colors.faintForeground} />
-              <TextInput
-                style={[styles.searchInput, { color: colors.foreground }]}
-                placeholder="Ikeja, Yaba, Enugu…"
-                placeholderTextColor={colors.faintForeground}
-                value={query}
-                onChangeText={setQuery}
-                autoCorrect={false}
+            <View style={{ marginTop: 16 }}>
+              <AreaPicker
+                value={{ country: 'Nigeria', state: area.state, lga: area.label }}
+                onChange={(picked: AreaChoice) => {
+                  setArea({
+                    key: picked.lga.toLowerCase().replace(/\s+/g, '-'),
+                    label: picked.lga,
+                    state: picked.state,
+                  });
+                  setAreaOpen(false);
+                }}
               />
-              {searching ? (
-                <ActivityIndicator size="small" color={colors.faintForeground} />
-              ) : trimmed.length > 0 ? (
-                <Pressable onPress={() => setQuery('')} hitSlop={8}>
-                  <Ionicons name="close-circle" size={16} color={colors.faintForeground} />
-                </Pressable>
-              ) : null}
             </View>
-
-            <Text style={[text.data, { color: colors.faintForeground, marginTop: 8 }]}>
-              {searchError
-                ? searchError
-                : hasLivePlaces
-                  ? `Search by ${providerLabel[placesProvider]}`
-                  : 'Set a places provider in .env to search beyond this list'}
-            </Text>
-
-            <ScrollView
-              style={{ marginTop: 10 }}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              {results.map((place) => {
-                const candidate = areaFromPlace(place);
-                return (
-                  <Pressable
-                    key={place.id}
-                    onPress={() => {
-                      setArea(candidate);
-                      setAreaOpen(false);
-                      setQuery('');
-                    }}
-                    style={({ pressed }) => [
-                      styles.areaRow,
-                      { borderBottomColor: colors.border, opacity: pressed ? 0.6 : 1 },
-                    ]}
-                  >
-                    <Ionicons name="location-outline" size={16} color={colors.mutedForeground} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[text.subheading, { color: colors.foreground }]}>
-                        {candidate.label}
-                      </Text>
-                      <Text style={[text.data, { color: colors.faintForeground }]} numberOfLines={1}>
-                        {place.area || candidate.state}
-                      </Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
-
-              {results.length === 0 && (
-                <>
-                  <Text style={[text.label, { color: colors.faintForeground, marginTop: 6, marginBottom: 8 }]}>
-                    Common areas
-                  </Text>
-                  {AREAS.map((option) => {
-                    const selected = option.key === area.key;
-                    return (
-                      <Pressable
-                        key={option.key}
-                        onPress={() => {
-                          setArea(option);
-                          setAreaOpen(false);
-                        }}
-                        style={({ pressed }) => [
-                          styles.areaRow,
-                          { borderBottomColor: colors.border, opacity: pressed ? 0.6 : 1 },
-                        ]}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text
-                            style={[
-                              text.subheading,
-                              {
-                                color: colors.foreground,
-                                fontFamily: selected ? font.sansBold : font.sansMedium,
-                              },
-                            ]}
-                          >
-                            {option.label}
-                          </Text>
-                          <Text style={[text.data, { color: colors.faintForeground }]}>
-                            {option.state}
-                          </Text>
-                        </View>
-                        {selected && (
-                          <Ionicons name="checkmark-circle" size={20} color={colors.primary} />
-                        )}
-                      </Pressable>
-                    );
-                  })}
-                </>
-              )}
-            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -622,17 +488,6 @@ const styles = StyleSheet.create({
     maxHeight: '86%',
   },
   grabber: { width: 38, height: 3, alignSelf: 'center', marginBottom: 16 },
-  search: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    borderWidth: 2,
-    borderRadius: 2,
-    paddingHorizontal: 13,
-    paddingVertical: 12,
-    marginTop: 16,
-  },
-  searchInput: { flex: 1, fontFamily: font.sans, fontSize: 15 },
   areaRow: {
     flexDirection: 'row',
     alignItems: 'center',

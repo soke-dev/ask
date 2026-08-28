@@ -23,7 +23,11 @@ type CacheEntry = { atBlock: number; raw: bigint; readAt: number };
 const cache = new Map<string, CacheEntry>();
 
 async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  const response = await fetch(config.chain.rpcUrl, {
+  // Log scans go to the endpoint that allows a wide block range; see
+  // config.chain.logsRpcUrl for why those are not the same provider.
+  const endpoint = method === 'eth_getLogs' ? config.chain.logsRpcUrl : config.chain.rpcUrl;
+
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),

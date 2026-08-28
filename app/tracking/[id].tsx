@@ -1,13 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useColors, type Theme } from '@/hooks/useColors';
+import { hasEvidence, isFinished, isTaken, taskPhase } from '@/utils/taskPhase';
+import { useDialog } from '@/contexts/DialogContext';
 import { font, text } from '@/constants/type';
 import { formatNaira, verifierCut } from '@/constants/money';
 import { formatDuration, formatRemaining, msUntilDeadline } from '@/constants/time';
 import { useApp } from '@/contexts/AppContext';
+import {
+  confirmAnswer,
+  myQuestions,
+  openDisputeOnServer,
+  relistQuestion,
+} from '@/utils/questionsApi';
+import { mediaUrl } from '@/utils/api';
+import { formatDistance } from '@/utils/evidenceChecks';
+import { disputeJob, escrowAvailable, refundJob, releaseJob } from '@/utils/escrowApi';
+import { useSignAuthorization } from '@/utils/privy';
 import { useRealtime, useRealtimeStatus } from '@/hooks/useRealtime';
 import { VerificationCard, Verification } from '@/components/VerificationCard';
 
@@ -18,35 +30,32 @@ type EvidenceAction = 'confirm' | 'query' | null;
  * people may be offered the job, but only whoever accepts it first walks
  * anywhere — and only they get paid.
  */
-const RESPONSE: Verification & { id: string } = {
-  id: 'v1',
-  workerInitials: 'AK',
-  workerName: 'Akin',
-  response: 'Petrol is available, queue is moving fast.',
-  detail: '₦895 per litre · about 12 cars waiting · video sent',
-  timeAgo: '2 min ago',
-  distance: '0.3 km away',
-  mediaType: 'video',
+/**
+ * An empty answer, until the server sends a real one.
+ *
+ * This used to be a complete fabricated response — a verifier called Akin with
+ * 218 jobs, standing 0.3km away, reporting ₦895 per litre. It rendered in the
+ * same card as a real answer with nothing to distinguish it, so the tracking
+ * screen showed an answer to a question nobody had gone and checked.
+ */
+const EMPTY_RESPONSE: Verification & { id: string } = {
+  id: '',
+  workerInitials: '',
+  workerName: '',
+  response: '',
+  detail: '',
+  timeAgo: '',
+  distance: '',
+  mediaType: 'photo',
   status: 'pending',
-  idVerified: true,
-  jobsDone: 218,
-  capturedAt: '14:32 · 2 min ago',
-  capturedNear: 'Airport Road, 40 m from the pumps',
-  duration: '0:14',
-  // What the gate reported on this submission. Written out rather than
-  // generated so the shape matches exactly what runEvidenceGate returns, and
-  // includes a skipped check because that is the normal case in a build with
-  // no backend configured — the asker should see the gap, not a clean sweep.
-  checks: [
-    { name: 'duration', verdict: 'pass', detail: '14s long.' },
-    { name: 'distance', verdict: 'pass', detail: 'Captured 40m from the place.' },
-    {
-      name: 'clarity',
-      verdict: 'skipped',
-      detail: 'Not checked for blur or lighting — this build has no server.',
-    },
-  ],
+  idVerified: false,
+  jobsDone: 0,
+  capturedAt: '',
+  capturedNear: '',
+  duration: '',
+  checks: [],
 };
+
 
 function Pulse({ color, size = 8 }: { color: string; size?: number }) {
   const opacity = useRef(new Animated.Value(1)).current;
@@ -67,17 +76,32 @@ function Pulse({ color, size = 8 }: { color: string; size?: number }) {
   );
 }
 
-/** A schematic "map" — a survey grid with a signal ping, not a fake satellite tile. */
-function GroundMap({ colors, label }: { colors: Theme; label: string }) {
+/**
+ * A schematic "map" — a survey grid with a signal ping, not a fake satellite
+ * tile.
+ *
+ * The ping only sweeps while the question is still running. It means "we are
+ * waiting to hear something about this place", and on a job that was answered
+ * and paid days ago there is nothing left to hear: a settled question in
+ * History sat there pulsing as though something were still happening.
+ */
+function GroundMap({ colors, label, live }: { colors: Theme; label: string; live: boolean }) {
   const ring = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (!live) {
+      // Parked at rest rather than mid-sweep, so a settled map is not frozen
+      // halfway through an expanding ring.
+      ring.setValue(0);
+      return;
+    }
+
     const anim = Animated.loop(
       Animated.timing(ring, { toValue: 1, duration: 2400, useNativeDriver: true }),
     );
     anim.start();
     return () => anim.stop();
-  }, [ring]);
+  }, [ring, live]);
 
   return (
     <View style={[map.wrap, { backgroundColor: colors.sunken, borderColor: colors.border }]}>
@@ -148,11 +172,70 @@ const map = StyleSheet.create({
   walker: { position: 'absolute', width: 7, height: 7, borderRadius: 2 },
 });
 
+/**
+ * Where a question stands, from what app state already knows about it.
+ *
+ * Mirrors the ladder the loader walks: taken, then delivered, then paid. Note
+ * `showFinal` follows `confirmed` only and never `closed` — a refunded
+ * question is finished, but "Answer settled · paid" would be a lie about it.
+ */
+function seedFrom(query: { taskStatus?: string | null; verifierName?: string | null } | undefined) {
+  const phase = taskPhase(query?.taskStatus);
+
+  const confirmed = isFinished(phase);
+  const delivered = hasEvidence(phase);
+  const taken = isTaken(phase);
+
+  return {
+    // Queried sits at the asker's step: evidence is in and the ruling is what
+    // is outstanding, even though a reviewer now makes it rather than them.
+    stepIndex: confirmed ? 3 : delivered ? 2 : taken ? 1 : 0,
+    shown: delivered,
+    showFinal: confirmed,
+    taken,
+    confirmed,
+    // Only once somebody has actually taken it. Naming a verifier on a job
+    // nobody has picked up would be the same class of lie in the other
+    // direction.
+    workerName: taken ? (query?.verifierName ?? '') : '',
+  };
+}
+
 export default function TrackingScreen() {
   const colors = useColors();
+  const { confirm, notify } = useDialog();
+  /**
+   * True from the tap until the refund has actually happened.
+   *
+   * Closing does a server call and an on-chain refund, and the screen was
+   * re-rendering underneath as each landed — the question flipping to closed,
+   * the steps rearranging, the window disappearing — before the dialog finally
+   * arrived to explain it. Saying "closing" first turns that into one wait
+   * instead of a sequence of jumps.
+   */
+  const [closing, setClosing] = useState(false);
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { queries, closeQuery, openDispute, disputeForQuery } = useApp();
+  const {
+    queries,
+    closeQuery,
+    openDispute,
+    disputeForQuery,
+    refreshWallet,
+    refreshMyQuestions,
+    refreshBalance,
+    dispatchError,
+    clearDispatchError,
+  } = useApp();
+  const signAuthorization = useSignAuthorization();
+  /**
+   * Set when the answer was accepted but the money did not move.
+   *
+   * Distinct from a failed confirmation: the decision stands, and saying
+   * nothing would leave somebody believing a verifier had been paid when the
+   * transfer never happened.
+   */
+  const [settleError, setSettleError] = useState<string | null>(null);
 
   /**
    * Everything about this question arrives on one topic — the task being
@@ -172,12 +255,30 @@ export default function TrackingScreen() {
   const question = query?.question ?? 'Checking that location…';
   const place = query?.place ?? null;
 
-  const [stepIndex, setStepIndex] = useState(0);
-  const [shown, setShown] = useState(false);
-  const [showFinal, setShowFinal] = useState(false);
-  const [response, setResponse] = useState({ ...RESPONSE });
+  /**
+   * Opens where the question already is, not at the beginning.
+   *
+   * `/questions/mine` reports `taskStatus`, so by the time History can list a
+   * question app state already knows whether it was taken, delivered or paid.
+   * Starting every flag at false threw that away and re-derived it from the
+   * server, so a settled question opened as four empty checkboxes and filled
+   * itself in a moment later.
+   *
+   * This is a starting position, not the truth: the loader below still asks
+   * the server and corrects anything that has moved on since the last refresh.
+   */
+  const seed = seedFrom(query);
+
+  const [stepIndex, setStepIndex] = useState(seed.stepIndex);
+  const [shown, setShown] = useState(seed.shown);
+  const [showFinal, setShowFinal] = useState(seed.showFinal);
+  const [response, setResponse] = useState({ ...EMPTY_RESPONSE, workerName: seed.workerName });
+  /** False until the server has said what came back, if anything. */
+  const [answerLoaded, setAnswerLoaded] = useState(false);
+  /** Set by the loader when a verifier has actually taken the job. */
+  const [taken, setTaken] = useState(seed.taken);
   const [action, setAction] = useState<EvidenceAction>(null);
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmed, setConfirmed] = useState(seed.confirmed);
   const fade = useRef(new Animated.Value(0)).current;
 
   // Ticks so the countdown moves and the refund offer appears the moment the
@@ -190,25 +291,109 @@ export default function TrackingScreen() {
 
   const dispute = query ? disputeForQuery(query.id) : null;
   const msLeft = query ? msUntilDeadline(query.dispatchedAt, query.deadlineMinutes) : 0;
-  const overdue = msLeft <= 0;
+  /**
+   * Unknown is not overdue.
+   *
+   * With no query loaded yet `msLeft` is 0, which read as a passed deadline —
+   * so a question that had only just been sent showed the overdue banner and
+   * hid the way out behind it.
+   */
+  /**
+   * Past the deadline, and we have actually checked.
+   *
+   * `answerLoaded` matters as much as the clock. Without it the banner
+   * declared "nobody delivered" in the gap between the question loading from
+   * app state and the answer arriving from the server — announcing a failure
+   * it had not looked for, on a job somebody may already have done.
+   */
+  const overdue = query !== null && answerLoaded && msLeft <= 0;
+
+  // Whoever took it, or a neutral word until somebody has. An empty name
+  // rendered as " took the job", which read like a bug and was one.
+  const worker = response.workerName || 'Somebody';
+
+  /**
+   * Four steps, each a genuinely different state.
+   *
+   * There were five. "Offered to people nearby" and "Waiting for somebody to
+   * take it" described the same moment — a question is offered *because*
+   * nobody has taken it — so the tracker showed one state as two rows and
+   * appeared stuck on the first.
+   *
+   * Each row now changes its own wording as it completes, rather than being
+   * followed by another row saying the same thing differently.
+   */
+  /**
+   * Nothing is live until the server has answered.
+   *
+   * Every flag below starts false, so an unloaded question rendered as "just
+   * sent" — a settled one flashed through waiting, evidence and your-turn on
+   * its way to the truth. A moment of nothing is better than a moment of
+   * something wrong.
+   */
+  /**
+   * A question app state already holds is known enough to draw.
+   *
+   * This was `answerLoaded` alone, which meant "the server has replied to this
+   * screen" — but arriving from History the status is already in hand, and
+   * waiting for a second confirmation of it is what produced the blank
+   * checklist. A question we have never seen still waits.
+   */
+  const known = answerLoaded || Boolean(query);
+
+  /** Nothing further will happen to this question. */
+  const settled = confirmed || showFinal || Boolean(query?.closed);
+
+  /**
+   * Closed with the money returned, rather than paid out.
+   *
+   * `settled` covers every way a question ends and so cannot describe any of
+   * them. A refunded question has no verifier, no evidence and no payment, so
+   * the four progress steps have nothing to say about it — and rendering them
+   * empty made a finished question read as one that had only just been sent.
+   */
+  const refunded = Boolean(query?.closed) && !confirmed && !shown;
 
   const STEPS = [
-    { label: 'Offered to people nearby', sub: '3 within 500 m', done: stepIndex > 0, live: stepIndex === 0 },
-    { label: `${response.workerName} took the job`, sub: 'Locked to them until it expires', done: stepIndex > 1, live: stepIndex === 1 },
-    { label: 'Evidence came back', sub: `${response.mediaType} proof sent`, done: stepIndex > 2, live: stepIndex === 2 },
-    { label: 'Your turn to check it', sub: 'Confirm it or query it', done: confirmed, live: stepIndex === 3 && !confirmed },
-    { label: 'Answer settled', sub: `${response.workerName} paid`, done: showFinal, live: stepIndex === 4 && !showFinal },
+    {
+      label: taken ? `${worker} took it` : 'Waiting for somebody to take it',
+      sub: taken ? 'Locked to them until the deadline' : 'Anyone nearby can take it',
+      done: stepIndex > 0,
+      live: known && stepIndex === 0,
+    },
+    {
+      label: shown ? 'Evidence came back' : 'Waiting on evidence',
+      sub: shown ? `${response.mediaType} proof sent` : 'They have until the deadline',
+      done: stepIndex > 1,
+      live: known && stepIndex === 1,
+    },
+    {
+      label: 'Your turn to check it',
+      sub: 'Confirm it or query it',
+      done: confirmed,
+      live: known && stepIndex === 2 && !confirmed,
+    },
+    {
+      label: 'Answer settled',
+      sub: `${worker} paid`,
+      done: showFinal,
+      live: known && stepIndex === 3 && !showFinal,
+    },
   ];
+;
 
-  useEffect(() => {
-    const timers = [
-      setTimeout(() => setStepIndex(1), 1800),
-      setTimeout(() => setStepIndex(2), 4200),
-      setTimeout(() => setShown(true), 5200),
-      setTimeout(() => setStepIndex(3), 6000),
-    ];
-    return () => timers.forEach(clearTimeout);
-  }, []);
+  /**
+   * The progress steps used to run on a timer.
+   *
+   * Four setTimeouts marched the tracker from "sent" to "your turn to check
+   * it" over six seconds and revealed the answer card at 5.2s — whether or not
+   * anybody had taken the job, gone anywhere, or sent anything. It looked
+   * exactly like a real delivery.
+   *
+   * The steps now follow what the server reports, which is why they can also
+   * sit still for an hour: that is what waiting for somebody to walk somewhere
+   * actually looks like.
+   */
 
   useEffect(() => {
     if (confirmed && !showFinal) {
@@ -217,18 +402,164 @@ export default function TrackingScreen() {
     }
   }, [confirmed, showFinal]);
 
+  /**
+   * Accepts the answer and pays for it.
+   *
+   * The screen advances first because confirming is irreversible and the
+   * person has already been warned — making them watch a spinner after the
+   * decision adds nothing. What follows is the money actually moving.
+   */
+  /**
+   * Reads what actually came back for this question.
+   *
+   * Polled while the answer is outstanding, because a verifier submits on
+   * their own schedule and the asker is sitting on this screen waiting. It
+   * stops once something has arrived — there is nothing further to wait for.
+   */
+  const serverId = query?.serverId ?? null;
+
+  useEffect(() => {
+    if (!serverId) return;
+    let stopped = false;
+
+    async function load() {
+      const result = await myQuestions();
+      if (!result.ok || stopped) return;
+
+      // Matched on the server id, which is what /questions/mine returns.
+      const mine = result.data.questions.find((q) => q.id === serverId);
+      setAnswerLoaded(true);
+      if (!mine) return;
+
+      // Somebody has taken it, even if they have not sent anything yet.
+      if (mine.taskId) {
+        setTaken(true);
+        setStepIndex((prev) => Math.max(prev, 1));
+      }
+
+      const submitted = mine.taskStatus === 'submitted' || mine.taskStatus === 'confirmed';
+      if (!submitted || !mine.answer) return;
+
+      // Only now is there something to show.
+      setShown(true);
+      setStepIndex((prev) => Math.max(prev, 2));
+
+      /**
+       * A settled job reads as settled, on any device.
+       *
+       * `confirmed` and `showFinal` were only ever set by the confirm button,
+       * so they lived and died with that one session. Reloading showed a paid,
+       * closed question still sitting on "Your turn to check it" — asking
+       * somebody to decide something they had already decided.
+       */
+      if (mine.taskStatus === 'confirmed') {
+        setConfirmed(true);
+        setShowFinal(true);
+        setStepIndex(3);
+      }
+
+      const name = mine.verifierName ?? 'A verifier';
+      setResponse((prev) => ({
+        ...prev,
+        id: mine.taskId ?? '',
+        workerName: name,
+        workerInitials: name.slice(0, 2).toUpperCase(),
+        response: mine.answer ?? '',
+        // Deliberately blank rather than padded with detail we do not have.
+        detail: '',
+        mediaType: mine.evidenceKind === 'video' ? 'video' : 'photo',
+        // Absolute, so the app can actually load it.
+        mediaUri: mediaUrl(mine.evidenceUrl),
+        status: mine.taskStatus === 'confirmed' ? 'confirmed' : 'pending',
+        capturedNear:
+          mine.distanceMetres !== null
+            ? `${mine.distanceMetres} m from ${mine.placeName ?? 'the place'}`
+            : '',
+        distance: mine.distanceMetres !== null ? formatDistance(mine.distanceMetres) : '',
+      }));
+    }
+
+    void load();
+    const timer = setInterval(load, 10_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [serverId]);
+
   function handleConfirm() {
     setAction('confirm');
     setResponse((v) => ({ ...v, status: 'confirmed' }));
     setConfirmed(true);
-    setStepIndex(4);
+    setStepIndex(3);
     Animated.timing(fade, { toValue: 1, duration: 380, useNativeDriver: true }).start();
+
+    void (async () => {
+      if (!query) return;
+
+      // The ledger first: it is what every screen reads, and it settles
+      // whether or not the job was ever funded on chain.
+      if (!query.serverId) {
+        setSettleError('This question never reached the server, so it cannot be settled.');
+        return;
+      }
+      const paid = await confirmAnswer(query.serverId);
+      if (!paid.ok) {
+        setSettleError(`Payment did not go through — ${paid.detail}`);
+        return;
+      }
+
+      // Then the contract, when there is one. A ledger-only job is already
+      // finished; releasing is what moves the real USDC when there is any.
+      if (await escrowAvailable()) {
+        const released = await releaseJob(query.serverId, signAuthorization);
+        if (!released.ok && released.code !== 'not_funded') {
+          setSettleError(
+            released.code === 'declined'
+              ? 'Confirmed. Sign when you are ready to release the funds.'
+              : `Confirmed, but the on-chain release failed — ${released.detail}`,
+          );
+        }
+      }
+
+      await Promise.all([refreshWallet(), refreshBalance()]);
+    })();
   }
 
   function handleQuery(reason: string) {
     if (!query) return;
     setAction('query');
     setResponse((v) => ({ ...v, status: 'queried' }));
+
+    /**
+     * Record it on the server first.
+     *
+     * The chain freeze and the local state were both happening already, but
+     * nothing wrote it to Postgres — so the review desk had nothing to show
+     * and the money stayed frozen with nobody able to decide it.
+     */
+    void (async () => {
+      if (!query.serverId) return;
+      const recorded = await openDisputeOnServer(query.serverId, reason);
+      if (!recorded.ok && recorded.code !== 'already_disputed') {
+        setSettleError(`Your query was not recorded — ${recorded.detail}`);
+      }
+    })();
+
+    /**
+     * Freeze it on chain as well, when the job is funded there.
+     *
+     * Without this the contract still thinks the job is claimed and its
+     * deadline keeps running — so an asker could query an answer and have the
+     * money released out from under the dispute.
+     */
+    void (async () => {
+      if (!query.serverId || !(await escrowAvailable())) return;
+      const frozen = await disputeJob(query.serverId, signAuthorization);
+      if (!frozen.ok && frozen.code !== 'not_funded') {
+        setSettleError(`The query was recorded, but the job is not frozen on chain — ${frozen.detail}`);
+      }
+    })();
 
     // Real record now, not a timer. It waits on the verifier, then a person.
     openDispute({
@@ -259,23 +590,41 @@ export default function TrackingScreen() {
           >
             <Ionicons name="arrow-back" size={18} color={colors.foreground} />
           </Pressable>
-          {/* Only claims "Live" when a socket is genuinely open. With no
-              backend configured this shows nothing rather than a green dot
-              that means nothing. */}
-          {connection === 'open' && (
+          {/* A finished question has nothing left to watch, so the whole
+              connection indicator goes with it. "Live" on a settled job is
+              true about the socket and misleading about the question, which
+              is the thing somebody is actually looking at. */}
+          {refunded ? (
             <View style={styles.liveTag}>
-              <Pulse color={colors.accent} />
-              <Text style={[text.label, { color: colors.accent }]}>Live</Text>
+              <Ionicons name="arrow-undo-circle" size={13} color={colors.mutedForeground} />
+              <Text style={[text.label, { color: colors.mutedForeground }]}>Refunded</Text>
             </View>
-          )}
-          {connection === 'connecting' && (
-            <Text style={[text.label, { color: colors.faintForeground }]}>Connecting…</Text>
-          )}
-          {connection === 'offline' && (
+          ) : settled ? (
             <View style={styles.liveTag}>
-              <Ionicons name="cloud-offline-outline" size={13} color={colors.pending} />
-              <Text style={[text.label, { color: colors.pending }]}>Reconnecting</Text>
+              <Ionicons name="checkmark-circle" size={13} color={colors.primary} />
+              <Text style={[text.label, { color: colors.primary }]}>Settled</Text>
             </View>
+          ) : (
+            <>
+              {/* Only claims "Live" when a socket is genuinely open. With no
+                  backend configured this shows nothing rather than a green dot
+                  that means nothing. */}
+              {connection === 'open' && (
+                <View style={styles.liveTag}>
+                  <Pulse color={colors.accent} />
+                  <Text style={[text.label, { color: colors.accent }]}>Live</Text>
+                </View>
+              )}
+              {connection === 'connecting' && (
+                <Text style={[text.label, { color: colors.faintForeground }]}>Connecting…</Text>
+              )}
+              {connection === 'offline' && (
+                <View style={styles.liveTag}>
+                  <Ionicons name="cloud-offline-outline" size={13} color={colors.pending} />
+                  <Text style={[text.label, { color: colors.pending }]}>Reconnecting</Text>
+                </View>
+              )}
+            </>
           )}
         </View>
 
@@ -294,9 +643,24 @@ export default function TrackingScreen() {
           </View>
         )}
 
-        <GroundMap colors={colors} label={place?.name ?? 'Locating'} />
+        <GroundMap colors={colors} label={place?.name ?? 'Locating'} live={!settled} />
+
+        {/* ── Closed ───────────────────────────────────────────────
+            Shown instead of the progress list, not alongside it. Nobody took
+            this one, so every step below would be an empty box and the screen
+            would read as a question still waiting for somebody. */}
+        {refunded && (
+          <View style={[styles.settleWarn, { borderColor: colors.border, marginTop: 26 }]}>
+            <Ionicons name="arrow-undo-circle" size={15} color={colors.mutedForeground} />
+            <Text style={[text.bodySmall, { color: colors.mutedForeground, flex: 1 }]}>
+              You closed this before anybody took it. ₦{formatNaira(query?.bounty ?? 0)} went back
+              to your wallet.
+            </Text>
+          </View>
+        )}
 
         {/* ── Progress ─────────────────────────────────────────────── */}
+        {!refunded && (
         <View style={styles.steps}>
           {STEPS.map((step, i) => (
             <View key={i} style={styles.stepRow}>
@@ -351,11 +715,18 @@ export default function TrackingScreen() {
             </View>
           ))}
         </View>
+        )}
 
         {/* ── The window ────────────────────────────────────────────
             Once evidence is in, the clock stops mattering: somebody has
-            already done the walking, so the money is no longer refundable. */}
-        {!showFinal && query && (
+            already done the walking, so the money is no longer refundable.
+
+            Gated on `settled` rather than `showFinal`, which only ever meant
+            *confirmed*. A question the asker had closed and been refunded for
+            was none of confirmed, so the window kept running underneath it and
+            went on offering to close and refund something already closed and
+            refunded. Settled covers all three ways a question ends. */}
+        {!settled && query && (
           <View
             style={[
               styles.clockBox,
@@ -369,11 +740,15 @@ export default function TrackingScreen() {
                 color={overdue && !shown ? colors.danger : colors.mutedForeground}
               />
               <Text style={[text.bodySmall, { color: colors.mutedForeground, flex: 1 }]}>
+                {/* Says what is known, and nothing more. Before the server
+                    has answered, the only true statement is the window. */}
                 {shown
                   ? `Delivered inside the ${formatDuration(query.deadlineMinutes)} window.`
-                  : overdue
-                    ? `Nobody delivered inside the ${formatDuration(query.deadlineMinutes)} you allowed.`
-                    : `You allowed ${formatDuration(query.deadlineMinutes)}.`}
+                  : !answerLoaded
+                    ? `You allowed ${formatDuration(query.deadlineMinutes)}. Checking…`
+                    : overdue
+                      ? `Nobody delivered inside the ${formatDuration(query.deadlineMinutes)} you allowed.`
+                      : `You allowed ${formatDuration(query.deadlineMinutes)}.`}
               </Text>
               <Text
                 style={[
@@ -393,27 +768,149 @@ export default function TrackingScreen() {
                 </Text>
                 <View style={styles.clockActions}>
                   <Pressable
+                    /**
+                     * Asked before, acknowledged after.
+                     *
+                     * This closed the question and jumped to the home screen
+                     * in the same tap — an irreversible money decision taken
+                     * on one press, with nothing to say it had happened. From
+                     * the asker's side it read as the button having simply
+                     * dismissed the page.
+                     */
                     onPress={() => {
-                      closeQuery(query.id);
-                      router.replace('/(tabs)');
+                      void (async () => {
+                        const sure = await confirm({
+                          title: `Close and refund ₦${formatNaira(query.bounty)}?`,
+                          message:
+                            'The question comes off the board and nobody can answer it. Your money goes back to your wallet.',
+                          confirmLabel: 'Close and refund',
+                          cancelLabel: 'Keep waiting',
+                          tone: 'danger',
+                        });
+                        if (!sure) return;
+
+                        setClosing(true);
+                        // Only claim the money moved once the server says so.
+                        const closed = await closeQuery(query.id);
+                        if (!closed.ok) {
+                          setClosing(false);
+                          await notify({
+                            title: 'Not closed',
+                            message: closed.detail ?? 'That did not go through. Try again.',
+                          });
+                          return;
+                        }
+
+                        /**
+                         * And take it out of the contract, which the close
+                         * route does not do.
+                         *
+                         * Closing writes the refund to the ledger only. The
+                         * on-chain half has its own endpoint, and nothing in
+                         * the app had ever called it — so every question ever
+                         * closed left its USDC sitting in escrow while the app
+                         * told the asker they had been refunded. Unlike the
+                         * release, this needs no signature: the contract
+                         * enforces the deadline itself and can only pay the
+                         * asker it already recorded.
+                         */
+                        let stuck: string | null = null;
+                        if (query.serverId && (await escrowAvailable())) {
+                          const back = await refundJob(query.serverId);
+                          if (!back.ok && back.code !== 'not_funded') stuck = back.detail;
+                        }
+
+                        setClosing(false);
+                        await notify({
+                          title: stuck ? 'Closed, but the money has not moved' : 'Refunded',
+                          message: stuck
+                            ? `The question is closed and nobody can answer it. The on-chain refund did not go through — ${stuck}`
+                            : `₦${formatNaira(query.bounty)} is back in your wallet.`,
+                        });
+                        router.replace('/(tabs)');
+                      })();
                     }}
+                    disabled={closing}
                     style={({ pressed }) => [
                       styles.refundBtn,
-                      { backgroundColor: colors.danger, opacity: pressed ? 0.88 : 1 },
+                      {
+                        backgroundColor: colors.danger,
+                        opacity: pressed || closing ? 0.88 : 1,
+                      },
                     ]}
                   >
-                    <Text style={[text.action, { color: colors.background }]}>
-                      Close · refund ₦{formatNaira(query.bounty)}
-                    </Text>
+                    {/*
+                      * Shrinks to fit rather than truncating.
+                      *
+                      * Two buttons have to share this row, and how much room
+                      * the words need is not ours to decide: Android measures
+                      * this face wider than iOS, and a large accessibility
+                      * font scale can double it. Clipping "Refund ₦150" to
+                      * "Refun…" hides the amount, which is the one part of a
+                      * refund button nobody should have to guess at.
+                      *
+                      * letterSpacing is dropped here too — it is the most
+                      * expensive thing in a narrow button and buys nothing at
+                      * this size.
+                      */}
+                    {closing ? (
+                      <View style={styles.refundBusy}>
+                        <ActivityIndicator size="small" color={colors.background} />
+                        <Text style={[text.action, styles.tightLabel, { color: colors.background }]}>
+                          Closing
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.6}
+                        style={[text.action, styles.tightLabel, { color: colors.background }]}
+                      >
+                        Refund ₦{formatNaira(query.bounty)}
+                      </Text>
+                    )}
                   </Pressable>
                   <Pressable
-                    onPress={() => router.replace('/(tabs)')}
+                    disabled={closing}
+                    /**
+                     * Waiting on means putting it back, not walking away.
+                     *
+                     * This navigated home and changed nothing: the question
+                     * stayed past its deadline and still locked to a verifier
+                     * who never arrived, so nobody else could see it and the
+                     * only real option was the refund beside it.
+                     */
+                    onPress={() => {
+                      void (async () => {
+                        if (!query.serverId) {
+                          router.replace('/(tabs)');
+                          return;
+                        }
+                        const again = await relistQuestion(query.serverId);
+                        if (!again.ok) {
+                          setSettleError(`Could not put it back — ${again.detail}`);
+                          return;
+                        }
+                        await refreshMyQuestions();
+                        await notify({
+                          title: 'Back on the board',
+                          message: 'Anyone nearby can take it again, and the clock has restarted.',
+                        });
+                        router.replace('/(tabs)');
+                      })();
+                    }}
                     style={({ pressed }) => [
                       styles.waitBtn,
                       { borderColor: colors.borderStrong, opacity: pressed ? 0.7 : 1 },
                     ]}
                   >
-                    <Text style={[text.action, { color: colors.mutedForeground }]}>
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.6}
+                      style={[text.action, styles.tightLabel, { color: colors.mutedForeground }]}
+                    >
                       Keep waiting
                     </Text>
                   </Pressable>
@@ -496,6 +993,23 @@ export default function TrackingScreen() {
           </View>
         )}
 
+        {dispatchError && (
+          <View style={[styles.settleWarn, { borderColor: colors.danger, marginTop: 18 }]}>
+            <Ionicons name="close-circle-outline" size={16} color={colors.danger} />
+            <View style={{ flex: 1, gap: 8 }}>
+              <Text style={[text.bodySmall, { color: colors.danger }]}>{dispatchError}</Text>
+              <Pressable
+                onPress={() => {
+                  clearDispatchError();
+                  router.back();
+                }}
+              >
+                <Text style={[text.action, { color: colors.accent }]}>Go back and try again</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
         {shown && (
           <>
             <Text style={[text.label, { color: colors.faintForeground, marginTop: 32, marginBottom: 4 }]}>
@@ -504,9 +1018,29 @@ export default function TrackingScreen() {
             <Text style={[text.bodySmall, { color: colors.mutedForeground, marginBottom: 14 }]}>
               Confirm it if it answers your question. Query it if it looks wrong.
             </Text>
+            {/* The decision stuck but the money did not move. Said plainly,
+                because silence here reads as "paid". */}
+            {settleError && (
+              <View style={[styles.settleWarn, { borderColor: colors.pending }]}>
+                <Ionicons name="warning-outline" size={15} color={colors.pending} />
+                <Text style={[text.bodySmall, { color: colors.pending, flex: 1 }]}>
+                  {settleError}
+                </Text>
+              </View>
+            )}
+
             <VerificationCard
               verification={response}
-              showActions={action === null}
+              /**
+               * Nothing left to decide once a query is open.
+               *
+               * `action` is this screen's memory of the tap and resets on every
+               * reload, so after a refresh the buttons came back and offered to
+               * query a question that was already with a reviewer — or to
+               * confirm evidence the asker had just objected to. The dispute
+               * row is the durable answer to "has this been ruled on yet".
+               */
+              showActions={action === null && dispute === null}
               payout={verifierCut(query?.bounty ?? 0)}
               onConfirm={handleConfirm}
               onQuery={handleQuery}
@@ -516,15 +1050,24 @@ export default function TrackingScreen() {
 
         {/* ── Leaving does not cancel anything ─────────────────────
             Watching a progress list is not work, and someone is walking
-            somewhere either way. Say so plainly and offer the exit. */}
-        {!showFinal && !(overdue && !shown) && (
+            somewhere either way. Say so plainly and offer the exit.
+
+            Shown whenever the question is still open, including once it is
+            overdue. It used to disappear at the deadline, which conflated two
+            different actions: the overdue banner offers "Close · Refund",
+            which ends the *question*, while this ends the *screen*. Somebody
+            who wants to keep waiting was left with no way out but the browser
+            back button. */}
+        {!showFinal && (
           <View style={[styles.leaveBox, { borderColor: colors.border }]}>
             <View style={styles.leaveTop}>
               <Ionicons name="notifications-outline" size={15} color={colors.mutedForeground} />
               <Text style={[text.bodySmall, { color: colors.mutedForeground, flex: 1 }]}>
                 {shown
                   ? 'Nothing expires while you are away. Pick this back up from Your questions on the Ask tab.'
-                  : `This carries on without you. We will alert you the moment ${response.workerName} sends the evidence.`}
+                  : overdue
+                    ? 'Your money is still held. Leave this open or close it above — either way nothing is lost.'
+                    : `This carries on without you. We will alert you the moment ${worker.toLowerCase()} sends the evidence.`}
               </Text>
             </View>
 
@@ -558,7 +1101,7 @@ export default function TrackingScreen() {
                 {response.detail}
               </Text>
               <Text style={[text.bodySmall, { color: colors.mutedForeground }]}>
-                You confirmed this as accurate, so {response.workerName} has been paid ₦
+                You confirmed this as accurate, so {worker} has been paid ₦
                 {formatNaira(verifierCut(query?.bounty ?? 0))} of your ₦
                 {formatNaira(query?.bounty ?? 0)} after the platform fee.
               </Text>
@@ -613,20 +1156,54 @@ const styles = StyleSheet.create({
   clockBox: { borderWidth: 2, borderRadius: 2, padding: 14, gap: 10, marginTop: 4 },
   clockTop: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   clockActions: { flexDirection: 'row', gap: 9 },
+  // Tracking costs real width at button size, and these two have none to give.
+  tightLabel: { letterSpacing: 0.2 },
+  refundBusy: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  /**
+   * Both halves share the row rather than one taking what the other leaves.
+   *
+   * refundBtn was flex: 1 and waitBtn was sized to its own text, so the row's
+   * width depended on how wide the platform drew "Keep waiting" — fine on iOS
+   * and not on Android, where this face measures wider and the pair no longer
+   * fitted side by side.
+   *
+   * minWidth: 0 is the part that actually holds it: without it a flex child
+   * will not shrink below its content, which is how a row with flex children
+   * still manages to overflow.
+   */
   refundBtn: {
-    flex: 1,
+    /**
+     * Roughly two thirds of the row.
+     *
+     * It carries a verb and an amount where its neighbour carries two words,
+     * so an even split starved the longer label and left it shrinking to fit
+     * while the shorter one sat in space it did not need. The width is also
+     * the point: this is the decision the banner is offering, and "keep
+     * waiting" is the way out of it, not its equal.
+     *
+     * 3 and 2 rather than percentages: 3/(3+2) is exactly the 60% wanted, and
+     * flexbox takes the 9px gap out of the space before dividing it. Setting
+     * flexBasis to '60%' and '40%' would come to 100% of the row *plus* the
+     * gap, and overflow by exactly that much.
+     */
+    flex: 3,
+    minWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 2,
     paddingVertical: 13,
+    paddingHorizontal: 10,
   },
   waitBtn: {
+    // The other 40%. See refundBtn for why these are 3 and 2.
+    flex: 2,
+    minWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
     borderRadius: 2,
     paddingVertical: 13,
-    paddingHorizontal: 18,
+    paddingHorizontal: 10,
   },
 
   leaveBox: { borderWidth: 2, borderRadius: 2, padding: 14, gap: 12, marginTop: 12 },
@@ -642,6 +1219,15 @@ const styles = StyleSheet.create({
   },
 
   dispute: { borderWidth: 2, borderRadius: 2, padding: 16, marginTop: 10 },
+  settleWarn: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 9,
+    borderWidth: 2,
+    borderRadius: 2,
+    padding: 12,
+    marginBottom: 12,
+  },
   side: { borderWidth: 2, borderRadius: 2, padding: 11, marginTop: 10 },
 
   answer: { borderWidth: 2, borderRadius: 2, padding: 20, gap: 8, marginTop: 8 },

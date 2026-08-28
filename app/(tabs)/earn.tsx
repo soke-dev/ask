@@ -1,7 +1,5 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Animated,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -14,8 +12,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
-import { AREAS, useApp } from '@/contexts/AppContext';
-import { FEE_PERCENT } from '@/constants/money';
+import { isJobNearArea, useApp } from '@/contexts/AppContext';
+import { useRefreshOnFocus } from '@/hooks/useRefreshOnFocus';
+import {
+  JobFilterSheet,
+  NO_FILTERS,
+  activeFilterCount,
+  matchesFilters,
+  sortJobs,
+  type JobFilters,
+} from '@/components/JobFilterSheet';
+import { useLocalSearchParams } from 'expo-router';
+import { formatNaira, verifierCut } from '@/constants/money';
 import { TaskCard } from '@/components/TaskCard';
 import { JobRow } from '@/components/JobRow';
 
@@ -24,7 +32,19 @@ import { JobRow } from '@/components/JobRow';
  * "Near me" leads because a job you cannot reach is not a job — the rest of
  * the country is one tap away under "All".
  */
-const FILTERS = ['Near me', 'All', 'Fuel', 'Food', 'Traffic', 'Shopping', 'Safety'] as const;
+// Ordered by how often somebody is likely to want it, not alphabetically.
+// 'Other' sits last because it is the leftovers, not a subject.
+const FILTERS = [
+  'Near me',
+  'All',
+  'Housing',
+  'Traffic',
+  'Food',
+  'Fuel',
+  'Shopping',
+  'Safety',
+  'Other',
+] as const;
 type Filter = (typeof FILTERS)[number];
 
 export default function EarnScreen() {
@@ -37,46 +57,111 @@ export default function EarnScreen() {
     locationFilter,
     setLocationFilter,
     disputes,
+    refreshJobs,
+    refreshMyJobs,
+    refreshDisputes,
+    deliveredJobs,
+    queriedJobs,
   } = useApp();
 
-  const openQueries = disputes.filter((d) => d.status === 'awaiting_verifier').length;
+  /**
+   * Everything My jobs will list, not just what is left to walk to.
+   *
+   * The button counted activeJobs while the screen behind it also shows sent
+   * and queried work, so tapping "View all 1" landed on a list of three.
+   */
+  const openJobs = activeJobs.length + deliveredJobs.length + queriedJobs.length;
+
+  /**
+   * The board is other people's work, so this screen cannot know when it
+   * changes — only when somebody is looking at it. Both lists, because a job
+   * that leaves the board because you took it has to arrive in the other one.
+   */
+  useRefreshOnFocus(
+    useCallback(
+      // Disputes too: a query raised against your answer is work waiting on
+      // you, and it arrives from the other person's device, never yours.
+      () => Promise.all([refreshJobs(), refreshMyJobs(), refreshDisputes()]),
+      [refreshJobs, refreshMyJobs, refreshDisputes],
+    ),
+  );
+
+  /**
+   * Queries waiting on *you as the verifier*, which is what Earn is about.
+   *
+   * Without the role test this counted the asker's own queries too, so raising
+   * one put a banner on your own Earn tab telling you an answer of yours had
+   * been queried and asking you to reply to yourself.
+   */
+  const openQueries = disputes.filter(
+    (d) => d.status === 'awaiting_verifier' && d.role === 'verifier',
+  ).length;
+
+  /**
+   * Answered, and still not over.
+   *
+   * Replying moves a query to 'awaiting_admin', which took it out of the count
+   * above and off this tab entirely — so a verifier who had just written their
+   * side watched it disappear with nothing to say it had been received. This
+   * is not something to act on, it is somewhere for it to still exist.
+   */
+  const waitingOnReviewer = disputes.filter(
+    (d) => d.status === 'awaiting_admin' && d.role === 'verifier',
+  ).length;
   const topPad = Platform.OS === 'web' ? 22 : insets.top + 6;
 
+  /**
+   * Opens on Near me when arrived at from the "jobs around you" tile.
+   *
+   * The tile states a number for one particular area, so landing on whatever
+   * filter was last used would show a different list than the one tapped.
+   * Near me is also the default, so this only matters when the filter was
+   * changed earlier in the session.
+   */
+  const { filter: filterParam } = useLocalSearchParams<{ filter?: string }>();
   const [filter, setFilter] = useState<Filter>('Near me');
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const sheetAnim = useRef(new Animated.Value(400)).current;
 
-  function openSheet() {
-    setSheetOpen(true);
-    Animated.spring(sheetAnim, {
-      toValue: 0,
-      tension: 62,
-      friction: 12,
-      useNativeDriver: true,
-    }).start();
-  }
+  /**
+   * The narrower filters, kept apart from the category chips.
+   *
+   * The chips answer "what kind of job"; these answer "where, for how much,
+   * and how long have I got". Different questions, and combining them into one
+   * row would have meant a chip per state.
+   */
+  const [filters, setFilters] = useState<JobFilters>(NO_FILTERS);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const narrowed = activeFilterCount(filters);
 
-  function closeSheet() {
-    Animated.timing(sheetAnim, { toValue: 400, duration: 220, useNativeDriver: true }).start(() =>
-      setSheetOpen(false),
-    );
-  }
+  useEffect(() => {
+    if (filterParam === 'near') setFilter('Near me');
+  }, [filterParam]);
 
-  // Where "near me" means: the area you picked to work in, falling back to
-  // the home area on your profile.
+  /**
+   * Where "near me" means: the home area on your profile.
+   *
+   * There was a picker here for browsing another city, and it stopped making
+   * sense the moment taking a job required standing at the place. Choosing
+   * "Ikeja" from Surulere offered a list of jobs the server would refuse, so
+   * the control promised something the rules do not allow.
+   *
+   * `locationFilter` is still read because app state still carries it; nothing
+   * on this screen sets it any more.
+   */
   const nearLabel = locationFilter?.label ?? homeArea.label;
 
-  const available = nearbyTasks.filter((t) => {
-    if (t.status !== 'available') return false;
+  const available = sortJobs(
+    nearbyTasks.filter((t) => {
+      if (t.status !== 'available') return false;
 
-    const area = t.area?.toLowerCase() ?? '';
-    const near = nearLabel.toLowerCase();
-    const isNear = area.includes(near) || near.includes(area);
+      // Both sets apply: a category chip and a state are an "and", not a choice.
+      if (!matchesFilters(t, filters)) return false;
 
-    if (filter === 'Near me') return isNear;
-    if (filter === 'All') return true;
-    return t.category.toLowerCase() === filter.toLowerCase();
-  });
+      if (filter === 'Near me') return isJobNearArea(t, nearLabel);
+      if (filter === 'All') return true;
+      return t.category.toLowerCase() === filter.toLowerCase();
+    }),
+    filters.sort,
+  );
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -89,7 +174,10 @@ export default function EarnScreen() {
           <View style={{ flex: 1 }}>
             <Text style={[text.display, { color: colors.foreground }]}>Earn</Text>
             <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 2 }]}>
-              Go and look. Paid on-chain when the asker confirms.
+              {/* No mention of the chain. It is how the money moves, not what
+                  the person is being asked to do, and naming it here made a
+                  walk to a filling station sound like a crypto errand. */}
+              Go there, send proof, get paid when the asker confirms.
             </Text>
           </View>
         </View>
@@ -121,11 +209,34 @@ export default function EarnScreen() {
               ]}
             >
               <Text style={[text.action, { color: colors.foreground }]}>
-                View all {activeJobs.length}
+                View all {openJobs}
               </Text>
               <Ionicons name="arrow-forward" size={14} color={colors.foreground} />
             </Pressable>
           </>
+        )}
+
+        {waitingOnReviewer > 0 && (
+          <Pressable
+            onPress={() => router.push('/disputes')}
+            style={({ pressed }) => [
+              styles.queryBanner,
+              { borderColor: colors.border, opacity: pressed ? 0.7 : 1 },
+            ]}
+          >
+            <Ionicons name="hourglass-outline" size={16} color={colors.mutedForeground} />
+            <View style={{ flex: 1 }}>
+              <Text style={[text.subheading, { color: colors.foreground }]}>
+                {waitingOnReviewer === 1
+                  ? 'Your answer is with a reviewer'
+                  : `${waitingOnReviewer} answers are with a reviewer`}
+              </Text>
+              <Text style={[text.data, { color: colors.faintForeground }]}>
+                You have replied · nothing more to do
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.faintForeground} />
+          </Pressable>
         )}
 
         {/* Queries need answering before anything else on this tab. */}
@@ -150,23 +261,26 @@ export default function EarnScreen() {
           </Pressable>
         )}
 
-        {/* ── Where ────────────────────────────────────────────────── */}
+        {/* ── Filters ──────────────────────────────────────────────── */}
+        {/* Outside the horizontal scroller so it cannot scroll out of reach —
+            the row it sits beside is longer than the screen. */}
         <Pressable
-          onPress={openSheet}
+          onPress={() => setFilterOpen(true)}
           style={({ pressed }) => [
-            styles.areaBtn,
+            styles.filterBtn,
             {
-              borderColor: locationFilter ? colors.foreground : colors.border,
-              backgroundColor: pressed ? colors.sunken : 'transparent',
+              borderColor: narrowed > 0 ? colors.foreground : colors.border,
+              backgroundColor: narrowed > 0 ? colors.sunken : 'transparent',
+              opacity: pressed ? 0.7 : 1,
             },
           ]}
         >
-          <Ionicons name="location-outline" size={15} color={colors.foreground} />
-          <Text style={[text.subheading, { color: colors.foreground, flex: 1 }]} numberOfLines={1}>
-            {nearLabel}
+          <Ionicons name="options-outline" size={16} color={colors.foreground} />
+          <Text style={[text.subheading, { color: colors.foreground, flex: 1 }]}>
+            {narrowed === 0 ? 'Filter' : `${narrowed} filter${narrowed === 1 ? '' : 's'} on`}
           </Text>
-          {locationFilter ? (
-            <Pressable onPress={() => setLocationFilter(null)} hitSlop={10}>
+          {narrowed > 0 ? (
+            <Pressable onPress={() => setFilters(NO_FILTERS)} hitSlop={10}>
               <Ionicons name="close-circle" size={17} color={colors.mutedForeground} />
             </Pressable>
           ) : (
@@ -174,33 +288,6 @@ export default function EarnScreen() {
           )}
         </Pressable>
 
-        {/* ── At a glance ──────────────────────────────────────────── */}
-        <View style={[styles.glance, { borderColor: colors.border }]}>
-          {[
-            { label: 'Open', value: String(available.length) },
-            { label: 'Typical pay', value: '₦630' },
-            { label: 'Typical time', value: '6 min' },
-          ].map((s, i) => (
-            <View
-              key={s.label}
-              style={[
-                styles.glanceCell,
-                i > 0 && { borderLeftWidth: 1, borderLeftColor: colors.border },
-              ]}
-            >
-              <Text style={[text.amount, { color: colors.foreground, fontSize: 17 }]}>
-                {s.value}
-              </Text>
-              <Text style={[text.data, { color: colors.faintForeground }]}>{s.label}</Text>
-            </View>
-          ))}
-        </View>
-
-        <Text style={[text.data, styles.feeNote, { color: colors.faintForeground }]}>
-          Amounts shown are what you keep, after the {FEE_PERCENT} platform fee. Paid in USDC on Base.
-        </Text>
-
-        {/* ── Filters ──────────────────────────────────────────────── */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -260,6 +347,7 @@ export default function EarnScreen() {
             <Pressable
               onPress={() => {
                 setFilter('All');
+                setFilters(NO_FILTERS);
                 setLocationFilter(null);
               }}
               style={[styles.clearBtn, { borderColor: colors.borderStrong }]}
@@ -271,69 +359,13 @@ export default function EarnScreen() {
       </ScrollView>
 
       {/* ── Area sheet ─────────────────────────────────────────────── */}
-      <Modal visible={sheetOpen} transparent animationType="fade" onRequestClose={closeSheet}>
-        <Pressable style={[styles.backdrop, { backgroundColor: colors.overlay }]} onPress={closeSheet}>
-          <Animated.View
-            style={[
-              styles.sheet,
-              {
-                backgroundColor: colors.background,
-                borderColor: colors.border,
-                transform: [{ translateY: sheetAnim }],
-                paddingBottom: (Platform.OS === 'web' ? 24 : insets.bottom) + 24,
-              },
-            ]}
-          >
-            <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
-            <Text style={[text.title, { color: colors.foreground }]}>Where can you go?</Text>
-            <Text style={[text.body, { color: colors.mutedForeground, marginBottom: 8 }]}>
-              You will only see jobs — and get alerts — for the area you pick.
-            </Text>
 
-            <ScrollView showsVerticalScrollIndicator={false} style={styles.areaList}>
-              {AREAS.map((area) => {
-                const selected = locationFilter?.label === area.label;
-                return (
-                  <Pressable
-                    key={area.key}
-                    onPress={() => {
-                      setLocationFilter({ key: area.key, label: area.label });
-                      closeSheet();
-                    }}
-                    style={({ pressed }) => [
-                      styles.areaRow,
-                      {
-                        borderBottomColor: colors.border,
-                        backgroundColor: pressed ? colors.sunken : 'transparent',
-                      },
-                    ]}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          text.subheading,
-                          {
-                            color: colors.foreground,
-                            fontFamily: selected ? font.sansBold : font.sansMedium,
-                          },
-                        ]}
-                      >
-                        {area.label}
-                      </Text>
-                      <Text style={[text.data, { color: colors.faintForeground }]}>
-                        {area.state}
-                      </Text>
-                    </View>
-                    {selected && (
-                      <Ionicons name="checkmark-circle" size={20} color={colors.primary} />
-                    )}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </Animated.View>
-        </Pressable>
-      </Modal>
+      <JobFilterSheet
+        visible={filterOpen}
+        value={filters}
+        onClose={() => setFilterOpen(false)}
+        onApply={setFilters}
+      />
     </View>
   );
 }
@@ -366,23 +398,21 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
 
-  areaBtn: {
+  filterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 9,
+    gap: 10,
     borderWidth: 2,
     borderRadius: 2,
-    paddingHorizontal: 16,
+    paddingHorizontal: 13,
     paddingVertical: 12,
-    marginBottom: 14,
+    marginTop: 18,
   },
-
-  glance: { flexDirection: 'row', borderWidth: 2, borderRadius: 2, overflow: 'hidden' },
-  glanceCell: { flex: 1, alignItems: 'center', paddingVertical: 14, gap: 3 },
-
-  feeNote: { marginTop: 12, marginBottom: 20, lineHeight: 17 },
-
-  filterRow: { gap: 8, paddingRight: 20, marginBottom: 18 },
+  // The chips sit against the first job card, and 18 was not enough to read as
+  // a break between "how you are filtering" and "what you filtered to".
+  // Held off the Filter button above as well as the jobs below: the two are
+  // separate controls and were reading as one block stuck together.
+  filterRow: { gap: 8, paddingRight: 20, marginTop: 14, marginBottom: 30 },
   filterChip: { borderWidth: 2, borderRadius: 2, paddingHorizontal: 15, paddingVertical: 8 },
 
   empty: { alignItems: 'center', gap: 10, paddingVertical: 56 },
@@ -394,29 +424,4 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
 
-  backdrop: { flex: 1, justifyContent: 'flex-end' },
-  sheet: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderWidth: 2,
-    paddingHorizontal: 22,
-    paddingTop: 12,
-    gap: 6,
-    maxHeight: '82%',
-  },
-  grabber: {
-    width: 38,
-    height: 4,
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 18,
-  },
-  areaList: { marginTop: 6 },
-  areaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-  },
 });

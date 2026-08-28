@@ -8,7 +8,7 @@ import { text } from '@/constants/type';
 import { formatNaira } from '@/constants/money';
 import { VERIFIED_ONLY_ABOVE } from '@/constants/money';
 
-const SUPPORT_EMAIL = 'help@asknearby.app';
+const SUPPORT_EMAIL = 'help@confam.xyz';
 
 /** The questions the flow actually raises, answered where they are asked. */
 const FAQ: { q: string; a: string }[] = [
@@ -18,7 +18,7 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'The evidence looks wrong. Do I have to pay?',
-    a: 'No. Press Query instead of confirming. A person reviews both sides before any money moves, and the money stays held until that is settled.',
+    a: 'No. Press Query instead of confirming. Support reviews both sides before any money moves, and the money stays held until that is settled.',
   },
   {
     q: 'When exactly does the verifier get paid?',

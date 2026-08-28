@@ -63,7 +63,7 @@ export async function probeVideo(path: string): Promise<VideoProbe> {
  * actually filmed.
  */
 export async function extractFrames(path: string, duration: number, count: number) {
-  const dir = await mkdtemp(join(tmpdir(), 'asknearby-frames-'));
+  const dir = await mkdtemp(join(tmpdir(), 'confam-frames-'));
   try {
     const frames: Buffer[] = [];
     for (let i = 0; i < count; i += 1) {
@@ -104,7 +104,7 @@ export type VideoAnalysis = {
  * clearly. Averaging would fail honest evidence for being filmed while walking.
  */
 export async function analyseVideo(buffer: Buffer): Promise<VideoAnalysis> {
-  const dir = await mkdtemp(join(tmpdir(), 'asknearby-video-'));
+  const dir = await mkdtemp(join(tmpdir(), 'confam-video-'));
   const path = join(dir, 'clip.mp4');
 
   try {

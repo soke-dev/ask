@@ -1,16 +1,8 @@
 /**
- * Crypto polyfills, imported before anything else.
- *
- * Privy's SDK signs and verifies with WebCrypto, which React Native's JS
- * runtime does not ship. These must land before any Privy code evaluates —
- * the SDK captures `crypto` at module scope, so an import ordered after it
- * would patch a global nobody reads again.
- *
- * Side-effect imports, so ordering is the whole point; leave them at the top.
+ * The crypto polyfills used to live here, and could not work from here: this
+ * is a route module, and the router has already loaded Privy by the time it
+ * evaluates. They now run from index.js, ahead of the router entry.
  */
-import 'react-native-get-random-values';
-import 'fast-text-encoding';
-import '@ethersproject/shims';
 
 import React, { useEffect, type PropsWithChildren } from 'react';
 import { Platform, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
@@ -20,6 +12,7 @@ import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { WelcomeSheet } from '@/components/WelcomeSheet';
+import { Wordmark } from '@/components/Wordmark';
 import {
   Barlow_400Regular,
   Barlow_500Medium,
@@ -33,22 +26,24 @@ import {
   IBMPlexMono_700Bold,
 } from '@expo-google-fonts/ibm-plex-mono';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import { Stack, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useColors } from '@/hooks/useColors';
 import { AppProvider, useApp } from '@/contexts/AppContext';
 import { ThemeProvider } from '@/contexts/ThemeContext';
+import { DialogProvider } from '@/contexts/DialogContext';
 import { AuthProvider } from '@/components/AuthProvider';
 import { AccountSync } from '@/components/AccountSync';
 import { useAuth } from '@/utils/privy';
 import SignInScreen from './signin';
+import AdminScreen from './admin';
 
 SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
 /**
- * Ask Nearby is a phone app, so on a desktop browser we sit it in a centred,
+ * Confam is a phone app, so on a desktop browser we sit it in a centred,
  * phone-width frame rather than letting it stretch the full window. Done in
  * React Native rather than in an `app/+html.tsx` shell because that shell is
  * only honoured under static rendering — this works in dev and in export.
@@ -58,8 +53,20 @@ const queryClient = new QueryClient();
 function PhoneFrame({ children }: PropsWithChildren) {
   const colors = useColors();
   const { width, height } = useWindowDimensions();
+  const segments = useSegments();
 
-  const framed = Platform.OS === 'web' && width >= 480;
+  /**
+   * The review desk is not a phone app and must not be framed like one.
+   *
+   * Everything else here is built for a hand and gets a phone-width column on
+   * a desktop browser. The desk is the opposite case: it is only ever opened
+   * on a desktop, by staff, to compare an objection against a photograph — and
+   * squeezing that into 420px made the evidence too small to judge, which is
+   * the one thing the page exists for.
+   */
+  const isAdminRoute = segments[0] === 'admin';
+
+  const framed = Platform.OS === 'web' && width >= 480 && !isAdminRoute;
 
   if (!framed) {
     return <View style={[styles.fill, { backgroundColor: colors.background }]}>{children}</View>;
@@ -89,9 +96,9 @@ function BootScreen() {
 
   return (
     <View style={[styles.boot, { backgroundColor: colors.background }]}>
-      <Text style={[styles.bootMark, { color: colors.foreground }]}>
-        ASK<Text style={{ color: colors.mutedForeground }}> NEARBY</Text>
-      </Text>
+      {/* The same lockup the rest of the app uses, so the first painted frame
+          is not a different wordmark from every frame after it. */}
+      <Wordmark size={20} />
       <View style={[styles.bootRule, { backgroundColor: colors.accent }]} />
     </View>
   );
@@ -101,6 +108,18 @@ function RootLayoutNav() {
   const { user } = useApp();
   const { ready, user: privyUser } = useAuth();
   const colors = useColors();
+  const segments = useSegments();
+
+  /**
+   * The review desk is a separate surface, not part of the app.
+   *
+   * It is reached by URL, has its own password, and is operated by staff who
+   * have no reason to hold an Confam account. Routing it through the
+   * sign-in gate would mean two unrelated credentials to see one page — and
+   * would make a reviewer's ability to work depend on a Privy session they
+   * should not need.
+   */
+  const isAdminRoute = segments[0] === 'admin';
 
   /**
    * Waits for Privy before deciding anyone is signed out.
@@ -111,6 +130,8 @@ function RootLayoutNav() {
    * the app a moment later — the person had not been signed out, we simply had
    * not finished asking.
    */
+  if (isAdminRoute) return <AdminScreen />;
+
   if (!ready) return <BootScreen />;
 
   // Privy is the authority here: `user` is our mirror of it and lags by a
@@ -183,16 +204,20 @@ export default function RootLayout() {
           <GestureHandlerRootView style={styles.fill}>
             <KeyboardProvider>
               <ThemeProvider>
-                <AuthProvider>
-                  <AppProvider>
-                    {/* Inside AppProvider: it writes what the server knows
-                        into app state. Renders nothing. */}
-                    <AccountSync />
-                    <PhoneFrame>
-                      <RootLayoutNav />
-                    </PhoneFrame>
-                  </AppProvider>
-                </AuthProvider>
+                {/* Inside ThemeProvider because the dialog is themed, and
+                    outside everything else so any screen can raise one. */}
+                <DialogProvider>
+                  <AuthProvider>
+                    <AppProvider>
+                      {/* Inside AppProvider: it writes what the server knows
+                          into app state. Renders nothing. */}
+                      <AccountSync />
+                      <PhoneFrame>
+                        <RootLayoutNav />
+                      </PhoneFrame>
+                    </AppProvider>
+                  </AuthProvider>
+                </DialogProvider>
               </ThemeProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
@@ -205,7 +230,6 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   boot: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14 },
-  bootMark: { fontSize: 19, fontWeight: '700', letterSpacing: 1.2 },
   bootRule: { width: 46, height: 2 },
   backdrop: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   frame: {

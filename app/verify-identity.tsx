@@ -18,6 +18,7 @@ import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
 import { useApp } from '@/contexts/AppContext';
 import { VERIFIED_ONLY_ABOVE, formatNaira } from '@/constants/money';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 
 function isValidNin(nin: string) {
   return /^\d{11}$/.test(nin.trim());
@@ -76,7 +77,7 @@ export default function VerifyIdentityScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.scroll, { paddingTop: topPad }]}
@@ -301,7 +302,7 @@ export default function VerifyIdentityScreen() {
             </Pressable>
           </>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
     </View>
   );
 }

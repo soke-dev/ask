@@ -124,6 +124,11 @@ export type AdminDispute = {
   verifierName: string | null;
   evidenceKind: string | null;
   distanceMetres: number | null;
+  /** The file itself, so a decision is made on the evidence and not its label. */
+  evidenceUrl: string | null;
+  capturedAt: string | null;
+  /** What the verifier wrote when they sent it. */
+  answer: string | null;
 };
 
 export const getOverview = () => call<Overview>('/overview');

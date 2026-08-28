@@ -17,6 +17,16 @@ export default function MyQuestionsScreen() {
 
   // Overdue first: it is the only group with a decision waiting on you.
   const overdue = activeQuestions.filter((q) => q.status === 'overdue');
+  /**
+   * Queried needs its own group or it has none at all.
+   *
+   * These three filters are the whole list, so a status matching none of them
+   * is not merely ungrouped — it is invisible, present in the count at the top
+   * and absent from everything under it.
+   */
+  // Above everything: somebody walked somewhere and is waiting on a reply.
+  const delivered = activeQuestions.filter((q) => q.status === 'delivered');
+  const queried = activeQuestions.filter((q) => q.status === 'queried');
   const underway = activeQuestions.filter((q) => q.status === 'accepted');
   const waiting = activeQuestions.filter((q) => q.status === 'waiting');
 
@@ -48,6 +58,36 @@ export default function MyQuestionsScreen() {
               Overdue · you can close these
             </Text>
             {overdue.map((q) => (
+              <QuestionRow
+                key={q.id}
+                question={q}
+                onPress={() => router.push(`/tracking/${q.id}`)}
+              />
+            ))}
+          </>
+        )}
+
+        {delivered.length > 0 && (
+          <>
+            <Text style={[text.label, styles.group, { color: colors.accent }]}>
+              Evidence in · your turn
+            </Text>
+            {delivered.map((q) => (
+              <QuestionRow
+                key={q.id}
+                question={q}
+                onPress={() => router.push(`/tracking/${q.id}`)}
+              />
+            ))}
+          </>
+        )}
+
+        {queried.length > 0 && (
+          <>
+            <Text style={[text.label, styles.group, { color: colors.pending }]}>
+              Queried · being reviewed
+            </Text>
+            {queried.map((q) => (
               <QuestionRow
                 key={q.id}
                 question={q}

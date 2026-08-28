@@ -1,5 +1,29 @@
 import { apiFetch, hasApi } from '@/utils/api';
-import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
+import { escrowAvailable, fundJob as fundJobOnChain, type TypedData } from '@/utils/escrowApi';
+import {
+  acceptJob as acceptJobOnServer,
+  abandonJob,
+  closeQuestion as closeQuestionOnServer,
+  myDisputes,
+  replyToDisputeOnServer,
+  myQuestions,
+  takenJobs,
+  answeredNearby as fetchAnswered,
+  dispatchQuestion,
+  fetchNotifications,
+  nearbyJobs,
+  type ServerJob,
+} from '@/utils/questionsApi';
+import { hasEvidence, isFinished, isVerifierActive, taskPhase } from '@/utils/taskPhase';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { DEFAULT_DEADLINE, msUntilDeadline } from '@/constants/time';
 import { FEE_PERCENT, VERIFIED_ONLY_ABOVE } from '@/constants/money';
 
@@ -9,10 +33,18 @@ export type NearbyTask = {
   description: string;
   location: string;
   area: string; // broad area for filtering e.g. "Ikeja"
+  /**
+   * The state the area sits in.
+   *
+   * Carried separately because a place name is not unique across Nigeria —
+   * there is an Airport Road in Lagos, in Abuja and in Benin City, and a
+   * verifier who reads only the street name can set off for the wrong one.
+   */
+  state: string;
   distance: string;
   reward: number;
   estimatedTime: string;
-  category: 'fuel' | 'food' | 'traffic' | 'shopping' | 'safety';
+  category: 'housing' | 'traffic' | 'fuel' | 'food' | 'shopping' | 'safety' | 'other';
   expiresIn: number;
   status: 'available' | 'accepted' | 'completed';
   viewersCount: number;
@@ -24,8 +56,35 @@ export type NearbyTask = {
   askerName?: string;
   /** The question this job was raised from, if it came from the Ask tab. */
   fromQueryId?: string;
+  /**
+   * The row in `tasks`, once this person has taken it.
+   *
+   * Needed to store evidence: the check endpoint files a submission against a
+   * task, and without it the photo is examined and then discarded.
+   */
+  taskId?: string;
+  /** What the server says about the job — accepted, submitted, confirmed. */
+  serverStatus?: string;
+  /**
+   * Whether the verifier's claim reached the contract.
+   *
+   * Null means it did not, and the escrow has nobody recorded to pay — the
+   * answer is delivered but the money cannot move until they sign.
+   */
+  claimTx?: string | null;
+  /** Null when the job was never funded on chain. */
+  chainJobId?: string | null;
   /** Restricted to verifiers who passed the NIN check. */
   verifiedOnly?: boolean;
+  /**
+   * When the job expires, as epoch milliseconds.
+   *
+   * An instant rather than a duration, because a duration has to be counted
+   * down by somebody — and a local counter restarts every time the screen is
+   * opened, so the deadline appeared to reset. Remaining time is now the
+   * difference between this and the clock, which nothing can rewind.
+   */
+  expiresAt: number;
   questions: {
     id: string;
     type: 'boolean' | 'text' | 'number';
@@ -60,6 +119,35 @@ export type Visibility = 'public' | 'private';
 
 export type Query = {
   id: string;
+  /**
+   * The row's id on the server, once it has one.
+   *
+   * Kept beside the local id rather than replacing it. Screens navigate with
+   * the local id the moment a question is sent — waiting on a round trip
+   * first would stall the tap — so swapping it afterwards left the tracking
+   * screen looking up an id that no longer existed, and it sat on "offered to
+   * people nearby" forever.
+   */
+  serverId?: string;
+  /**
+   * What the server says happened to the job behind this question.
+   *
+   * Carried because the asker's own device cannot work it out: an accepted
+   * job is not in their `nearbyTasks`, so the app was guessing from the
+   * `closed` flag alone — and a question is closed both when it is refunded
+   * and when it is confirmed and paid, which is how a completed job came to
+   * read "refunded".
+   */
+  taskStatus?: string | null;
+  disputeStatus?: string | null;
+  /**
+   * Who took the job, once somebody has.
+   *
+   * Carried for the same reason taskStatus is: the asker's device cannot work
+   * it out on its own. Without it the tracker opened a finished job reading
+   * "Somebody took it" and swapped in the real name once its own fetch landed.
+   */
+  verifierName?: string | null;
   question: string;
   place: Place | null;
   bounty: number;
@@ -87,8 +175,26 @@ export type QueryStatus =
   | 'accepted'
   /** The window ran out with no evidence. The asker may close it. */
   | 'overdue'
-  /** Evidence is in. From here it cannot be closed, only confirmed or queried. */
+  /**
+   * Evidence is in and the asker has not ruled on it yet.
+   *
+   * Split out from 'answered' because the two were one status and are not one
+   * state: this one is waiting on *you*. Sharing a status with settled meant
+   * evidence arriving moved the question out of Your questions and into
+   * History, filing a decision nobody had made.
+   */
+  | 'delivered'
+  /** Confirmed and paid. Nothing further can happen to it. */
   | 'answered'
+  /**
+   * Queried, and with somebody else now.
+   *
+   * Missing entirely before, so a task the server had marked `disputed` fell
+   * through every branch below and came out as 'waiting' — a question under
+   * review read "Waiting for someone" on the very screen the asker went to
+   * check on it.
+   */
+  | 'queried'
   /** The asker closed it and took the money back. */
   | 'refunded';
 
@@ -131,6 +237,17 @@ export type Dispute = {
   status: DisputeStatus;
   adminNote: string | null;
   createdAt: number;
+  /** The answer under dispute. Null for a locally-raised one until it syncs. */
+  answer: string | null;
+  /**
+   * Which side of this dispute you are on.
+   *
+   * There was no such field, and the list is device-local, so every dispute in
+   * it was one this device raised — as the asker — while Earn counted them as
+   * queries awaiting a verifier's reply. The asker was shown their own query
+   * as a job to go and answer.
+   */
+  role: 'asker' | 'verifier';
 };
 
 /** An answer somebody already paid for, reusable if they allowed it. */
@@ -143,81 +260,21 @@ export type CachedAnswer = {
   proof: 'photo' | 'video';
   /** The asker who paid for it accepted it. */
   confirmed: boolean;
-  /** Hours since it was verified; drives how much to trust it. */
+  /** How old the answer is. A stale one is worse than none. */
   ageHours: number;
   verifierName: string;
   verifierInitials: string;
   visibility: Visibility;
 };
 
-const CACHED_ANSWERS: CachedAnswer[] = [
-  {
-    id: 'c1',
-    placeName: 'NNPC Station, Airport Road',
-    area: 'Ikeja',
-    answer: 'Petrol available. About 12 cars queuing.',
-    detail: '₦895 per litre. Both pumps running.',
-    proof: 'video',
-    confirmed: true,
-    ageHours: 6,
-    verifierName: 'Akin',
-    verifierInitials: 'AK',
-    visibility: 'public',
-  },
-  {
-    id: 'c2',
-    placeName: 'Lekki Toll Gate',
-    area: 'Lekki',
-    answer: 'Heavy but moving. Roughly 20 minutes to clear.',
-    detail: 'Three lanes open, no accident.',
-    proof: 'video',
-    confirmed: true,
-    ageHours: 1,
-    verifierName: 'Tunde',
-    verifierInitials: 'TU',
-    visibility: 'public',
-  },
-  {
-    id: 'c3',
-    placeName: 'Computer Village',
-    area: 'Ikeja',
-    answer: 'Open and busy as usual.',
-    detail: 'Most stalls trading, main gate clear.',
-    proof: 'photo',
-    confirmed: true,
-    ageHours: 3,
-    verifierName: 'Ngozi',
-    verifierInitials: 'NG',
-    visibility: 'public',
-  },
-  {
-    id: 'c4',
-    placeName: 'Oyingbo Market',
-    area: 'Lagos Island',
-    answer: '50kg bag of rice is ₦85,000.',
-    detail: 'Foreign parboiled. Prices steady since morning.',
-    proof: 'video',
-    confirmed: true,
-    ageHours: 9,
-    verifierName: 'Morenike',
-    verifierInitials: 'MO',
-    visibility: 'public',
-  },
-  {
-    // Kept private by whoever paid for it, so it must never surface.
-    id: 'c5',
-    placeName: 'Mama Cass, Victoria Island',
-    area: 'Victoria Island',
-    answer: 'Open, roughly 15 minute wait.',
-    detail: 'Half full, counter service quick.',
-    proof: 'photo',
-    confirmed: false,
-    ageHours: 2,
-    verifierName: 'Bisi',
-    verifierInitials: 'BI',
-    visibility: 'private',
-  },
-];
+/**
+ * Loaded from the server, never seeded.
+ *
+ * A cached answer is a real answer somebody was paid for and chose to share,
+ * so inventing one would be inventing work that nobody did.
+ */
+const CACHED_ANSWERS: CachedAnswer[] = [];
+
 
 /**
  * An existing answer for this place, if one exists and its payer made it
@@ -268,6 +325,9 @@ function describeEntry(kind: string): string {
       return kind;
   }
 }
+
+/** Entry kinds that reduce the balance. Mirrors OUTFLOWS on the server. */
+const WALLET_OUTFLOWS = new Set(['hold', 'tip', 'fee', 'withdrawal']);
 
 export type WalletEntry = {
   id: string;
@@ -336,10 +396,6 @@ function profileFromEmail(email: string): Profile {
   };
 }
 
-/**
- * What a notification is about. The kind drives its colour code and where
- * tapping it takes you, so the list reads as a board rather than as prose.
- */
 export type NotificationKind = 'job' | 'answer' | 'payment' | 'identity' | 'dispute';
 
 export type AppNotification = {
@@ -350,73 +406,24 @@ export type AppNotification = {
   ago: string;
   today: boolean;
   read: boolean;
+  /**
+   * Where tapping it should go.
+   *
+   * Sent by the server, which knows which question or job the alert is about.
+   * Without it every notification could only reach a tab, and "your answer is
+   * ready" dropped you on Ask to find it yourself.
+   */
+  href?: string | null;
 };
 
-const INITIAL_NOTIFICATIONS: AppNotification[] = [
-  {
-    id: 'n1',
-    kind: 'job',
-    title: 'New job 300 m away',
-    body: 'Check fuel availability · NNPC Station, Airport Road · ₦210',
-    ago: '2 min',
-    today: true,
-    read: false,
-  },
-  {
-    id: 'n2',
-    kind: 'answer',
-    title: 'Evidence came back',
-    body: 'Akin sent video proof for your fuel question. Confirm it to release payment.',
-    ago: '12 min',
-    today: true,
-    read: false,
-  },
-  {
-    id: 'n3',
-    kind: 'job',
-    title: 'New job 1.2 km away',
-    body: 'Restaurant crowd check · Mama Cass, Victoria Island · ₦350',
-    ago: '38 min',
-    today: true,
-    read: false,
-  },
-  {
-    id: 'n4',
-    kind: 'payment',
-    title: 'You were paid ₦630',
-    body: `Fuel verification · Airport Road. Settled on Base after the ${FEE_PERCENT} fee.`,
-    ago: '2 hr',
-    today: true,
-    read: true,
-  },
-  {
-    id: 'n5',
-    kind: 'dispute',
-    title: 'Query resolved',
-    body: 'The evidence held up on review, so payment stayed with the verifier.',
-    ago: '5 hr',
-    today: true,
-    read: true,
-  },
-  {
-    id: 'n6',
-    kind: 'identity',
-    title: 'Identity verified',
-    body: 'NIMC confirmed your NIN. Jobs paying ₦500 and above are now open to you.',
-    ago: 'Yesterday',
-    today: false,
-    read: true,
-  },
-  {
-    id: 'n7',
-    kind: 'answer',
-    title: 'Your question was answered',
-    body: 'Third Mainland Bridge · photo proof · confirmed by you.',
-    ago: 'Yesterday',
-    today: false,
-    read: true,
-  },
-];
+/**
+ * Loaded from the server, never seeded.
+ *
+ * Notifications describe things that actually happened. Seeding them meant a
+ * brand-new account opened onto a history it did not have.
+ */
+const INITIAL_NOTIFICATIONS: AppNotification[] = [];
+
 
 export type Identity = {
   nin: string;
@@ -433,6 +440,33 @@ export type AreaFilter = {
 } | null;
 
 /** A town or district, with the state it sits in. */
+/**
+ * Whether a job counts as near the area somebody works in.
+ *
+ * Matches against the place's name as well as its area, because which of the
+ * two holds the locality depends entirely on where the place came from. OSM
+ * hands back a coarse area and puts the specific part in the name — the job
+ * sitting in Surulere is stored as `area: "Lagos", name: "Surulere"`, so
+ * testing `area` alone could never match a verifier who works in Surulere,
+ * and the Near me tab was empty while the board plainly had jobs on it.
+ *
+ * This is also why the area is not pushed to the server, which can filter on
+ * `p.area ILIKE` — that filter would miss exactly the same jobs, and further
+ * away from anywhere the mismatch is visible.
+ *
+ * An empty label means nowhere has been chosen yet, and everything is shown
+ * rather than nothing.
+ */
+export function isJobNearArea(
+  job: { location?: string; area?: string; state?: string },
+  label: string,
+): boolean {
+  const near = label.trim().toLowerCase();
+  if (!near) return true;
+
+  return `${job.location ?? ''} ${job.area ?? ''} ${job.state ?? ''}`.toLowerCase().includes(near);
+}
+
 export type Area = { key: string; label: string; state: string };
 
 export const AREAS: Area[] = [
@@ -470,6 +504,8 @@ export function placeForQuestion(question: FeedQuestion): Place {
 export type AnsweredQuestion = {
   id: string;
   text: string;
+  /** Where it was, at its most specific. Often the only field holding a town. */
+  placeName?: string | null;
   area: string;
   state: string;
   proof: 'photo' | 'video';
@@ -478,47 +514,19 @@ export type AnsweredQuestion = {
   ago: string;
 };
 
-/** What people around you are asking right now. */
-const FEED_QUESTIONS: FeedQuestion[] = [
-  { id: 'q1', text: 'Is there fuel at NNPC Airport Road?', placeName: 'NNPC Station, Airport Road', area: 'Ikeja', state: 'Lagos' },
-  { id: 'q2', text: 'Is Computer Village open today?', placeName: 'Computer Village', area: 'Ikeja', state: 'Lagos' },
-  { id: 'q3', text: 'How long is the queue at Mobil Allen Avenue?', placeName: 'Mobil Station, Allen Avenue', area: 'Ikeja', state: 'Lagos' },
-  { id: 'q4', text: 'Is Chicken Republic VI still open?', placeName: 'Chicken Republic, Adeola Odeku', area: 'Victoria Island', state: 'Lagos' },
-  { id: 'q5', text: 'How busy is Mama Cass right now?', placeName: 'Mama Cass, Victoria Island', area: 'Victoria Island', state: 'Lagos' },
-  { id: 'q6', text: 'How bad is Lekki Toll Gate traffic?', placeName: 'Lekki Toll Gate', area: 'Lekki', state: 'Lagos' },
-  { id: 'q7', text: 'Is Shoprite Lekki crowded this evening?', placeName: 'Shoprite, Lekki Phase 1', area: 'Lekki', state: 'Lagos' },
-  { id: 'q8', text: 'Is Slot Electronics on Adeniran open?', placeName: 'Slot Electronics, Adeniran Ogunsanya', area: 'Surulere', state: 'Lagos' },
-  { id: 'q9', text: 'Price of a 50kg bag of rice at Oyingbo?', placeName: 'Oyingbo Market', area: 'Lagos Island', state: 'Lagos' },
-  { id: 'q10', text: 'Is Balogun Market busy today?', placeName: 'Balogun Market', area: 'Lagos Island', state: 'Lagos' },
-  { id: 'q11', text: 'How bad is Third Mainland right now?', placeName: 'Third Mainland Bridge', area: 'Apapa', state: 'Lagos' },
-  { id: 'q12', text: 'Is Wuse Market open this late?', placeName: 'Wuse Market', area: 'Abuja Central', state: 'FCT' },
-  { id: 'q13', text: 'Any fuel around Garki right now?', placeName: 'Garki', area: 'Abuja Central', state: 'FCT' },
-  { id: 'q14', text: 'Is Ring Road passable after the rain?', placeName: 'Ring Road', area: 'Benin City', state: 'Edo' },
-  { id: 'q15', text: 'How long is the queue at Mile 1 Market?', placeName: 'Mile 1 Market', area: 'Port Harcourt', state: 'Rivers' },
-  { id: 'q16', text: 'Is Bodija Market still open?', placeName: 'Bodija Market', area: 'Ibadan', state: 'Oyo' },
-];
+/**
+ * Questions nearby, from the server. These are other people's real open
+ * questions; a fabricated one is a job nobody can take.
+ */
+const FEED_QUESTIONS: FeedQuestion[] = [];
+
 
 /**
- * Questions already settled.
- *
- * No confidence score. What makes one of these trustworthy is knowable and
- * true — what proof was sent, whether the asker accepted it, and how long
- * ago — so those are shown instead of a number nothing computes.
+ * Answered nearby, from the server. Every row here represents somebody who
+ * actually went somewhere and was paid for it.
  */
-const FEED_ANSWERED: AnsweredQuestion[] = [
-  { id: 'a1', text: 'Fuel at NNPC Airport Road right now?', area: 'Ikeja', state: 'Lagos', proof: 'video', confirmed: true, ago: '4 min' },
-  { id: 'a2', text: 'Is Computer Village crowded?', area: 'Ikeja', state: 'Lagos', proof: 'photo', confirmed: true, ago: '9 min' },
-  { id: 'a3', text: 'Chicken Republic on VI still open?', area: 'Victoria Island', state: 'Lagos', proof: 'photo', confirmed: true, ago: '18 min' },
-  { id: 'a4', text: 'Wait time at Mama Cass?', area: 'Victoria Island', state: 'Lagos', proof: 'photo', confirmed: false, ago: '25 min' },
-  { id: 'a5', text: 'Lekki Toll Gate traffic this morning?', area: 'Lekki', state: 'Lagos', proof: 'video', confirmed: true, ago: '7 min' },
-  { id: 'a6', text: 'Is Slot Surulere open?', area: 'Surulere', state: 'Lagos', proof: 'photo', confirmed: true, ago: '14 min' },
-  { id: 'a7', text: 'Price of rice at Oyingbo Market?', area: 'Lagos Island', state: 'Lagos', proof: 'video', confirmed: true, ago: '31 min' },
-  { id: 'a8', text: 'Traffic on Third Mainland Bridge?', area: 'Apapa', state: 'Lagos', proof: 'photo', confirmed: false, ago: '12 min' },
-  { id: 'a9', text: 'Fuel around Wuse right now?', area: 'Abuja Central', state: 'FCT', proof: 'video', confirmed: true, ago: '6 min' },
-  { id: 'a10', text: 'Is Ring Road flooded?', area: 'Benin City', state: 'Edo', proof: 'video', confirmed: true, ago: '22 min' },
-  { id: 'a11', text: 'Mile 1 Market crowd level?', area: 'Port Harcourt', state: 'Rivers', proof: 'photo', confirmed: false, ago: '35 min' },
-  { id: 'a12', text: 'Bodija Market prices today?', area: 'Ibadan', state: 'Oyo', proof: 'photo', confirmed: true, ago: '41 min' },
-];
+const FEED_ANSWERED: AnsweredQuestion[] = [];
+
 
 /**
  * Your town first, then the rest of your state.
@@ -527,11 +535,34 @@ const FEED_ANSWERED: AnsweredQuestion[] = [
  * that Third Mainland is jammed, and a quiet district would otherwise show
  * an empty feed.
  */
-function forArea<T extends { area: string; state: string }>(items: T[], home: Area): T[] {
-  const inTown = items.filter((item) => item.area === home.label);
+/**
+ * Nearby first, then the rest of the state.
+ *
+ * This compared `item.area === home.label` exactly, and nothing ever matched:
+ * a place in Surulere is stored as area "Lagos" with the name "Surulere", so
+ * an asker whose home area is Surulere saw an empty feed on a board that had
+ * answers on it. The state fallback did not save it either, because
+ * `places.state` is null on most rows.
+ *
+ * Matching the whole of what we know about a place — name, area, state —
+ * against the home label is the same approach isJobNearArea takes, for the
+ * same reason.
+ */
+function forArea<T extends { placeName?: string | null; area: string; state: string }>(
+  items: T[],
+  home: Area,
+): T[] {
+  const label = home.label.trim().toLowerCase();
+  const stateName = home.state.trim().toLowerCase();
+
+  const where = (item: T) =>
+    `${item.placeName ?? ''} ${item.area ?? ''} ${item.state ?? ''}`.toLowerCase();
+
+  const inTown = items.filter((item) => label !== '' && where(item).includes(label));
   const inState = items.filter(
-    (item) => item.area !== home.label && item.state === home.state,
+    (item) => !inTown.includes(item) && stateName !== '' && where(item).includes(stateName),
   );
+
   return [...inTown, ...inState];
 }
 
@@ -576,6 +607,12 @@ type AppContextType = {
   setAnswersPublicByDefault: (value: boolean) => void;
   questionsNearby: FeedQuestion[];
   answeredNearby: AnsweredQuestion[];
+  /** False until the job feed has been fetched at least once. */
+  feedLoaded: boolean;
+  refreshJobs: () => Promise<void>;
+  refreshDisputes: () => Promise<void>;
+  refreshAnswered: () => Promise<void>;
+  refreshNotifications: () => Promise<void>;
   /** Paid questions still in flight, newest first. */
   activeQuestions: ActiveQuestion[];
   /** Paid questions that have been answered and settled. */
@@ -584,6 +621,10 @@ type AppContextType = {
   activeJobs: NearbyTask[];
   /** Jobs you finished and were paid for. */
   completedJobs: NearbyTask[];
+  /** Evidence sent, waiting on the asker. */
+  deliveredJobs: NearbyTask[];
+  /** Queried by the asker, with a reviewer. */
+  queriedJobs: NearbyTask[];
   notifications: AppNotification[];
   unreadCount: number;
   markNotificationRead: (id: string) => void;
@@ -591,6 +632,17 @@ type AppContextType = {
   locationFilter: AreaFilter;
   queries: Query[];
   nearbyTasks: NearbyTask[];
+  /** Set when a question was not sent. Null once it succeeds. */
+  dispatchError: string | null;
+  clearDispatchError: () => void;
+  /** Places they have asked about before. Empty on a new account. */
+  recentPlaces: Place[];
+  /** Questions they have asked before, newest first. */
+  recentQuestions: string[];
+  /** Jobs this person has taken. */
+  myJobs: NearbyTask[];
+  refreshMyJobs: () => Promise<void>;
+  refreshMyQuestions: () => Promise<void>;
   walletBalance: number;
   pendingBalance: number;
   walletHistory: WalletEntry[];
@@ -600,9 +652,13 @@ type AppContextType = {
   balanceBlock: number | null;
   /** Live USD→NGN, or null when unavailable. */
   ngnPerUsd: number | null;
-  refreshBalance: () => Promise<void>;
+  refreshBalance: () => Promise<number | null>;
   signIn: (email: string) => void;
   signOut: () => void;
+  /** Lets AccountSync hand over Privy's logout. */
+  registerSignOut: (fn: (() => Promise<void>) | null) => void;
+  /** Lets AccountSync hand over the wallet's typed-data signer. */
+  registerSigner: (fn: (typedData: TypedData) => Promise<string>) => void;
   submitNin: (nin: string, fullName: string) => Promise<{ ok: boolean; detail?: string }>;
   refreshIdentity: () => Promise<void>;
   setLocationFilter: (filter: AreaFilter) => void;
@@ -626,7 +682,7 @@ type AppContextType = {
    * Give up on an overdue question and take the money back. Refused once
    * evidence exists — somebody has already walked there by then.
    */
-  closeQuery: (id: string) => void;
+  closeQuery: (id: string) => Promise<{ ok: boolean; detail?: string }>;
   tipVerifier: (amount: number, verifierName: string) => void;
 
   disputes: Dispute[];
@@ -641,24 +697,42 @@ type AppContextType = {
     reason: string;
     evidence: { kind: 'photo' | 'video'; detail: string };
   }) => void;
-  replyToDispute: (id: string, reply: string) => void;
+  replyToDispute: (
+    id: string,
+    reply: string,
+  ) => Promise<{ ok: boolean; detail?: string }>;
   /** Admin only. Moves the held money to whichever side was right. */
   resolveDispute: (id: string, winner: 'asker' | 'verifier', note: string) => void;
   disputeForQuery: (queryId: string) => Dispute | null;
-  acceptTask: (taskId: string) => void;
+  abandonTask: (taskId: string) => Promise<{ ok: boolean; detail?: string }>;
+  acceptTask: (
+    taskId: string,
+    at: { lat: number; lng: number },
+  ) => Promise<{ ok: boolean; detail?: string }>;
   completeTask: (taskId: string, reward: number, description: string) => void;
 };
 
 const AppContext = createContext<AppContextType | null>(null);
 
-/** Best guess at what a question is about, for the job's colour code. */
+/**
+ * Best guess at what a question is about, for the job's colour code.
+ *
+ * Kept in step with categorise() in api/src/routes/questions.ts — the server's
+ * answer wins for anything that reaches it, and this covers a question before
+ * it has been sent. Same order, same fallback, or the same question changes
+ * colour the moment it syncs.
+ */
 function inferCategory(question: string): NearbyTask['category'] {
   const q = question.toLowerCase();
-  if (/fuel|petrol|diesel|filling|pump|nnpc|mobil/.test(q)) return 'fuel';
+  if (/rent|house|housing|apartment|flat|self[- ]?con|landlord|agent|room|accommodation|lodge/.test(q)) {
+    return 'housing';
+  }
   if (/traffic|road|bridge|jam|flood|toll|passable/.test(q)) return 'traffic';
-  if (/food|restaurant|eat|chicken|crowd|open|busy/.test(q)) return 'food';
+  if (/fuel|petrol|diesel|filling|pump|nnpc|mobil/.test(q)) return 'fuel';
+  if (/food|restaurant|eat|chicken|jollof|buka|canteen/.test(q)) return 'food';
+  if (/market|shop|store|price|buy|supermarket|mall|stock/.test(q)) return 'shopping';
   if (/safe|security|danger|police/.test(q)) return 'safety';
-  return 'shopping';
+  return 'other';
 }
 
 /** "akin@example.com" -> "Akin". First names only, by design. */
@@ -682,7 +756,10 @@ function taskFromQuery(query: Query, bounty: number, askerName: string): NearbyT
     reward: bounty,
     estimatedTime: '~5 min',
     category: inferCategory(query.question),
-    expiresIn: 900,
+    // The asker's own deadline, not a fixed fifteen minutes.
+    state: query.place ? (stateForArea(query.place.area) ?? '') : '',
+    expiresIn: query.deadlineMinutes,
+    expiresAt: (query.dispatchedAt ?? Date.now()) + query.deadlineMinutes * 60_000,
     status: 'available',
     viewersCount: 1,
     askerName,
@@ -699,101 +776,12 @@ function taskFromQuery(query: Query, bounty: number, askerName: string): NearbyT
   };
 }
 
-const INITIAL_TASKS: NearbyTask[] = [
-  {
-    id: 't1',
-    title: 'Check fuel availability',
-    description:
-      'Visit the NNPC station on Airport Road. Check if petrol is available and take a photo of the pump area.',
-    location: 'NNPC Station, Airport Road',
-    area: 'Ikeja',
-    distance: '0.3 km',
-    reward: 300,
-    estimatedTime: '~3 min',
-    category: 'fuel',
-    expiresIn: 600,
-    status: 'available',
-    viewersCount: 4,
-    questions: [
-      { id: 'q1', type: 'boolean', label: 'Is petrol available?' },
-      { id: 'q2', type: 'number', label: 'Price per litre (₦)', placeholder: 'e.g. 895' },
-      { id: 'q3', type: 'text', label: 'Estimated queue length', placeholder: 'e.g. ~10 cars' },
-    ],
-  },
-  {
-    id: 't2',
-    title: 'Restaurant crowd check',
-    description:
-      'Visit Mama Cass on Victoria Island. Take a quick photo and report current crowd levels.',
-    location: 'Mama Cass, Victoria Island',
-    area: 'Victoria Island',
-    distance: '1.2 km',
-    reward: 500,
-    estimatedTime: '~5 min',
-    category: 'food',
-    expiresIn: 900,
-    status: 'available',
-    viewersCount: 7,
-    questions: [
-      { id: 'q1', type: 'boolean', label: 'Is the restaurant open?' },
-      { id: 'q2', type: 'text', label: 'How busy is it?', placeholder: 'e.g. Half full, ~15 min wait' },
-    ],
-  },
-  {
-    id: 't3',
-    title: 'Verify store hours',
-    description: 'Check if Slot Electronics on Adeniran Ogunsanya is currently open.',
-    location: 'Slot Electronics, Surulere',
-    area: 'Surulere',
-    distance: '0.4 km',
-    reward: 200,
-    estimatedTime: '~2 min',
-    category: 'shopping',
-    expiresIn: 450,
-    status: 'available',
-    viewersCount: 2,
-    questions: [
-      { id: 'q1', type: 'boolean', label: 'Is the store open?' },
-      { id: 'q2', type: 'text', label: 'Any notices or signs?', placeholder: 'Optional' },
-    ],
-  },
-  {
-    id: 't4',
-    title: 'Road flooding status',
-    description: 'Check Ring Road for flooding — can regular cars pass safely?',
-    location: 'Ring Road, Benin City',
-    area: 'Benin City',
-    distance: '2.1 km',
-    reward: 400,
-    estimatedTime: '~4 min',
-    category: 'traffic',
-    expiresIn: 300,
-    status: 'available',
-    viewersCount: 3,
-    questions: [
-      { id: 'q1', type: 'boolean', label: 'Is there flooding on the road?' },
-      { id: 'q2', type: 'text', label: 'Severity?', placeholder: 'e.g. Moderate, passable with care' },
-    ],
-  },
-  {
-    id: 't5',
-    title: 'Market price check',
-    description: 'Check the current price of a 50kg bag of rice at Oyingbo Market.',
-    location: 'Oyingbo Market, Lagos',
-    area: 'Lagos Island',
-    distance: '0.8 km',
-    reward: 250,
-    estimatedTime: '~3 min',
-    category: 'shopping',
-    expiresIn: 720,
-    status: 'available',
-    viewersCount: 5,
-    questions: [
-      { id: 'q1', type: 'number', label: 'Price of 50kg rice bag (₦)', placeholder: 'e.g. 85000' },
-      { id: 'q2', type: 'text', label: 'Brand / quality', placeholder: 'e.g. Tomato rice, foreign' },
-    ],
-  },
-];
+/**
+ * Jobs on the Earn tab, from the server. A seeded job is a promise of work
+ * and money that does not exist behind it.
+ */
+const INITIAL_TASKS: NearbyTask[] = [];
+
 
 /**
  * A new account starts empty, because a new account *is* empty.
@@ -847,6 +835,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Mirrors the disputes so resolveDispute can read the one it is settling.
   const disputesRef = useRef<Dispute[]>([]);
   const [nearbyTasks, setNearbyTasks] = useState<NearbyTask[]>(INITIAL_TASKS);
+  const [answeredFeed, setAnsweredFeed] = useState<AnsweredQuestion[]>([]);
+  /** Why the last dispatch did not go through, if it did not. */
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
+  /**
+   * Jobs this person has taken.
+   *
+   * Held apart from `nearbyTasks` because the two lists mean opposite things:
+   * one is what is still available, the other is what is no longer available
+   * because you took it. Accepting moves a job between them.
+   */
+  const [myJobs, setMyJobs] = useState<NearbyTask[]>([]);
+  const [feedLoaded, setFeedLoaded] = useState(false);
   useEffect(() => {
     tasksRef.current = nearbyTasks;
   }, [nearbyTasks]);
@@ -888,26 +888,71 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // Order matters. Evidence outranks the clock: once it is in, a passed
       // deadline no longer entitles the asker to the money back.
-      const status: QueryStatus = q.closed
-        ? 'refunded'
-        : job?.status === 'completed'
+      /**
+       * Order matters. Evidence outranks the clock: once it is in, a passed
+       * deadline no longer entitles the asker to the money back.
+       *
+       * The server's task status is preferred over anything local, because it
+       * is the only side that knows what the verifier did.
+       */
+      const phase = taskPhase(q.taskStatus);
+
+      /**
+       * A dispute row exists a moment before the task flips to 'disputed', so
+       * both are consulted. A resolved one is not a live query — whatever it
+       * settled on is already in the phase.
+       */
+      const queried =
+        phase === 'queried' ||
+        q.disputeStatus === 'awaiting_verifier' ||
+        q.disputeStatus === 'awaiting_admin';
+
+      /**
+       * Order is the logic. Settled outranks a query, because a confirmed and
+       * paid job is finished whatever was said on the way. A query outranks
+       * delivery, because disputed evidence is evidence that arrived — reading
+       * delivery first is what let 'answered' hide an open query.
+       */
+      const status: QueryStatus =
+        isFinished(phase)
           ? 'answered'
-          : overdue
-            ? 'overdue'
-            : job?.status === 'accepted'
-              ? 'accepted'
-              : 'waiting';
+          : q.closed
+            ? 'refunded'
+            : queried
+              ? 'queried'
+              : phase === 'delivered'
+                ? 'delivered'
+                : phase === 'working' || job?.status === 'accepted'
+                  ? 'accepted'
+                  : phase === 'expired' || overdue
+                    ? 'overdue'
+                    : 'waiting';
 
       return { ...q, status };
     })
-    .reverse();
+    /**
+     * Newest first, by timestamp rather than by position.
+     *
+     * This was .reverse(), which only ever worked by accident: it assumed the
+     * list arrived oldest-first because addQuery appends a new local question
+     * to the end. /questions/mine already returns ORDER BY created_at DESC,
+     * so reversing turned the server's newest-first into oldest-first and
+     * buried the most recent question at the bottom of History.
+     *
+     * Sorting on createdAt is right for both sources at once — a local
+     * question not yet sent to the server still carries the moment it was
+     * typed, so it sorts to the top without depending on where it sits.
+     */
+    .sort((a, b) => b.createdAt - a.createdAt);
 
   // Money out: tips, and bounties held against an open question. Money in:
   // earnings, top-ups, and refunds when a question is closed unanswered.
   const walletBalance = walletHistory
     .filter((e) => !e.pending)
     .reduce(
-      (sum, e) => (e.type === 'tip' || e.type === 'hold' ? sum - e.amount : sum + e.amount),
+      // Same rule as the server: everything that leaves the wallet subtracts.
+      // See OUTFLOWS in api/src/routes/auth.ts — the two must agree.
+      (sum, e) => (WALLET_OUTFLOWS.has(e.type) ? sum - e.amount : sum + e.amount),
       0,
     );
   const pendingBalance = walletHistory.filter((e) => e.pending).reduce((s, e) => s + e.amount, 0);
@@ -930,8 +975,64 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const finishOnboarding = useCallback(() => setOnboarded(true), []);
 
+  /**
+   * Ends the Privy session too.
+   *
+   * Set by AccountSync, which is the component that can reach the Privy hook.
+   * Without it `signOut` cleared local state only — and since the navigator
+   * treats Privy as the authority on who is signed in, a live Privy session
+   * kept you in the app and the button appeared to do nothing.
+   */
+  /**
+   * The wallet's typed-data signer, handed over by AccountSync.
+   *
+   * Signing is a hook and this is not a component, so the function is
+   * registered rather than called directly — the same arrangement as the token
+   * getter and the sign-out handler.
+   */
+  const signRef = useRef<(typedData: TypedData) => Promise<string>>(async () => {
+    throw new Error('No wallet is available to sign with.');
+  });
+  const registerSigner = useCallback((fn: (typedData: TypedData) => Promise<string>) => {
+    signRef.current = fn;
+  }, []);
+
+  const privySignOutRef = useRef<(() => Promise<void>) | null>(null);
+  const registerSignOut = useCallback((fn: (() => Promise<void>) | null) => {
+    privySignOutRef.current = fn;
+  }, []);
+
+  /**
+   * Signs out, and forgets everything about the person.
+   *
+   * All of it, not just `user`. Profile, wallet, ledger, questions, jobs and
+   * notifications are one person's data on a device somebody else may pick up
+   * next — leaving them in memory means the next sign-in briefly renders the
+   * previous account's balance and questions before the server replaces them.
+   */
   const signOut = useCallback(() => {
     setUser(null);
+    setProfile({ name: '', username: '', avatarUri: null });
+    setIdentity({ nin: '', status: 'unverified', name: null, reason: null });
+    setWallet(null);
+    setUsdcBalance(null);
+    setBalanceBlock(null);
+    setWalletHistory([]);
+    setJobsDone(0);
+    setQuestionsAsked(0);
+    setTotalDepositedUsdc(0);
+    setWalletLoaded(false);
+    setAccountLoaded(false);
+    setQueries([]);
+    setDisputes([]);
+    setNearbyTasks([]);
+    setAnsweredFeed([]);
+    setNotifications([]);
+    setOnboarded(false);
+
+    // Last, because it is the slow part and everything above should already
+    // be gone by the time the navigator re-renders.
+    void privySignOutRef.current?.();
   }, []);
 
   /**
@@ -955,6 +1056,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    * the dependency array would need one of them to exist before the other.
    */
   const refreshWalletRef = useRef<(() => Promise<void>) | null>(null);
+  const refreshMyQuestionsRef = useRef<(() => Promise<void>) | null>(null);
 
   const refreshWallet = useCallback(async () => {
     if (!hasApi) {
@@ -1017,20 +1119,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    * screen is a fraction of the complexity and, at Base's ~2s blocks, close
    * enough to live that the difference is not visible.
    */
-  const refreshBalance = useCallback(async () => {
-    if (!hasApi) return;
+  /**
+   * Returns what it read, as well as storing it.
+   *
+   * Callers that need the balance to decide something cannot use the state it
+   * sets: that lands on the next render, and the decision is being made now.
+   * Sending a question was doing exactly that and reading a stale figure.
+   */
+  const refreshBalance = useCallback(async (): Promise<number | null> => {
+    if (!hasApi) return null;
 
     /**
-     * Scan for new deposits before reading the balance back.
+     * The balance first, the deposit scan after.
      *
-     * Ordered this way so a top-up appears in the balance and in the activity
-     * list in the same refresh. Doing it after would show the money without
-     * the row explaining it until the next poll.
+     * Reading the balance is one eth_call and returns in well under a second.
+     * Scanning for deposits walks up to eight ranges of Base logs in sequence
+     * and can take ten — and it used to run first, so every screen waiting on
+     * a balance waited on the scan as well.
      *
-     * Safe to call on every refresh: the unique index on (tx_hash, log_index)
-     * means an already-recorded transfer is skipped by the database.
+     * Nothing about the balance depends on the scan: the chain already knows
+     * what the wallet holds. The scan only writes the ledger rows that explain
+     * where it came from, which can land a moment later.
      */
-    const sync = await apiFetch<{ inserted: number }>('/auth/deposits/sync', { method: 'POST' });
 
     const result = await apiFetch<{
       usdc: number | null;
@@ -1042,17 +1152,319 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!result.ok || result.data.usdc === null) {
       // Left as it was rather than zeroed — a failed read is not a balance.
       setBalanceBlock(null);
-      return;
+      // Null means "could not tell", which callers must not read as "broke".
+      return null;
     }
 
     setUsdcBalance(result.data.usdc);
     setBalanceBlock(result.data.blockNumber);
     if (result.data.ngnPerUsd) setNgnPerUsd(result.data.ngnPerUsd);
 
-    // Only re-read the ledger when something actually landed, rather than
-    // re-fetching it every twelve seconds for no change.
-    if (sync.ok && sync.data.inserted > 0) void refreshWalletRef.current?.();
+    // Now the slow part, with nothing waiting on it. The ledger is only
+    // re-read when something actually landed, rather than every poll.
+    void (async () => {
+      const sync = await apiFetch<{ inserted: number }>('/auth/deposits/sync', {
+        method: 'POST',
+      });
+      if (sync.ok && sync.data.inserted > 0) void refreshWalletRef.current?.();
+    })();
+
+    // The scan above is deliberately not awaited; the balance is already known.
+    return result.data.usdc;
   }, []);
+
+  /**
+   * Open jobs other people have posted.
+   *
+   * Shaped into NearbyTask here rather than on the server, because the card
+   * is a client concern — the server sends the facts and this decides how a
+   * countdown or a distance should read.
+   */
+  /**
+   * Replaces the local dispute list with the server's, both sides included.
+   *
+   * The list was only ever written by whoever raised a query, so it existed on
+   * one phone and the other party never saw it. The server knows both parties
+   * and says which one you are, so that is where the list has to come from.
+   */
+  const refreshDisputes = useCallback(async () => {
+    if (!hasApi) return;
+    const result = await myDisputes();
+    if (!result.ok) return;
+
+    setDisputes(
+      result.data.disputes.map((d) => ({
+        id: d.id,
+        queryId: d.questionId,
+        taskId: null,
+        question: d.question,
+        placeName: d.placeName ?? 'Unknown place',
+        bounty: d.bountyKobo / 100,
+        askerName: d.askerName ?? 'Someone',
+        askerReason: d.askerReason,
+        verifierName: d.verifierName ?? 'Someone',
+        verifierReply: d.verifierReply,
+        evidence: {
+          kind: d.evidenceKind ?? 'photo',
+          detail: d.evidenceUrl ?? '',
+        },
+        status: d.status as DisputeStatus,
+        adminNote: d.adminNote,
+        createdAt: new Date(d.createdAt).getTime(),
+        answer: d.answer,
+        role: d.role,
+      })),
+    );
+  }, []);
+
+  const refreshJobs = useCallback(async () => {
+    if (!hasApi) {
+      setFeedLoaded(true);
+      return;
+    }
+
+    const result = await nearbyJobs();
+    if (!result.ok) {
+      setFeedLoaded(true);
+      return;
+    }
+
+    setNearbyTasks(
+      result.data.jobs.map((job: ServerJob) => ({
+        id: job.id,
+        title: job.text,
+        // What to do, not where — the place is already on its own line, and
+        // repeating it read as a rendering bug.
+        description: 'Go there, see for yourself, and send photo or video proof of what you find.',
+        location: job.placeName ?? 'Nearby',
+        area: job.area ?? '',
+        state: job.state ?? '',
+        // Honest about not knowing: we have no fix on the verifier's position
+        // when the list is drawn, and a made-up "1.2km" is worse than a blank.
+        distance: '',
+        reward: job.bountyKobo / 100,
+        estimatedTime: `${job.deadlineMinutes}m`,
+        category: job.category,
+        expiresIn: job.minutesLeft,
+        expiresAt: Date.now() + job.minutesLeft * 60_000,
+        status: 'available' as const,
+        viewersCount: 0,
+        askerName: job.askerName ?? undefined,
+        fromQueryId: job.id,
+        verifiedOnly: job.verifiedOnly,
+        /**
+         * One free-text field, always.
+         *
+         * The photo shows the place; this is where the verifier says what it
+         * means — "no queue", "closed until Monday". Without it the asker gets
+         * an image and has to work out the answer themselves, which is the
+         * job they paid somebody else to do.
+         */
+        questions: [
+          {
+            id: 'what',
+            type: 'text' as const,
+            label: 'What did you find?',
+            placeholder: 'Say it plainly — the asker reads this first.',
+          },
+        ],
+      })),
+    );
+    setFeedLoaded(true);
+  }, []);
+
+  /** Shapes a server job into the card the app renders. */
+  const toTask = useCallback(
+    (
+      job: ServerJob & {
+        taskId?: string;
+        taskStatus?: string;
+        claimTx?: string | null;
+        chainJobId?: string | null;
+      },
+      status: NearbyTask['status'] = 'available',
+    ): NearbyTask => ({
+      id: job.id,
+      title: job.text,
+      description:
+        'Go there, see for yourself, and send photo or video proof of what you find.',
+      location: job.placeName ?? 'Nearby',
+      area: job.area ?? '',
+      state: job.state ?? '',
+      distance: '',
+      reward: job.bountyKobo / 100,
+      estimatedTime: `${job.deadlineMinutes}m`,
+      category: job.category,
+      expiresIn: job.minutesLeft,
+      expiresAt: Date.now() + job.minutesLeft * 60_000,
+      status,
+      viewersCount: 0,
+      askerName: job.askerName ?? undefined,
+      fromQueryId: job.id,
+      taskId: job.taskId,
+      serverStatus: job.taskStatus,
+      claimTx: job.claimTx ?? null,
+      chainJobId: job.chainJobId ?? null,
+      verifiedOnly: job.verifiedOnly,
+      questions: [
+        {
+          id: 'what',
+          type: 'text' as const,
+          label: 'What did you find?',
+          placeholder: 'Say it plainly — the asker reads this first.',
+        },
+      ],
+    }),
+    [],
+  );
+
+  /**
+   * The asker's own questions, from the server.
+   *
+   * `queries` was local state only, so a refresh emptied it — a question could
+   * be funded, dispatched and sitting on the board while the person who paid
+   * for it had no way to reach it. The server has always had them; nothing
+   * ever asked.
+   */
+  const refreshMyQuestions = useCallback(async () => {
+    if (!hasApi) return;
+    const result = await myQuestions();
+    if (!result.ok) return;
+
+    setQueries(
+      result.data.questions.map((q) => ({
+        // The server id doubles as the local one for anything it sent us:
+        // there is no earlier local identity to preserve.
+        id: q.id,
+        serverId: q.id,
+        question: q.text,
+        place: q.placeName
+          ? { id: q.id, name: q.placeName, area: q.area ?? '' }
+          : null,
+        bounty: q.bountyKobo / 100,
+        visibility: q.visibility,
+        deadlineMinutes: q.deadlineMinutes,
+        dispatchedAt: q.dispatchedAt ? new Date(q.dispatchedAt).getTime() : null,
+        verifiedOnly: q.verifiedOnly,
+        closed: Boolean(q.closedAt),
+        taskStatus: q.taskStatus,
+        verifierName: q.verifierName,
+        disputeStatus: q.disputeStatus,
+        /**
+         * The server's own created_at, not the dispatch time.
+         *
+         * Falling back to Date.now() for an undispatched question made its
+         * age change on every refresh, so it drifted to the top of History
+         * on its own. A question that has been asked has a creation time
+         * whether or not it was ever paid for and sent out.
+         */
+        createdAt: new Date(q.createdAt).getTime(),
+      })),
+    );
+  }, []);
+
+  refreshMyQuestionsRef.current = refreshMyQuestions;
+
+  const refreshMyJobs = useCallback(async () => {
+    if (!hasApi) return;
+    const result = await takenJobs();
+    if (!result.ok) return;
+    setMyJobs(
+      result.data.jobs.map((job) =>
+        /**
+         * Submitted is still in flight, not finished.
+         *
+         * Mapping it to 'completed' dropped a job out of "You are doing this"
+         * the moment evidence was sent — so a verifier waiting on the asker
+         * had no way back to it and no sign it existed.
+         */
+        toTask(job, job.taskStatus === 'confirmed' ? 'completed' : 'accepted'),
+      ),
+    );
+  }, [toTask]);
+
+  const refreshAnswered = useCallback(async () => {
+    if (!hasApi) return;
+    const result = await fetchAnswered();
+    if (result.ok) setAnsweredFeed(result.data.answered);
+  }, []);
+
+  const refreshNotifications = useCallback(async () => {
+    if (!hasApi) return;
+    const result = await fetchNotifications();
+    if (!result.ok) return;
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    setNotifications(
+      result.data.notifications.map((n) => {
+        const at = new Date(n.at);
+        const minutes = Math.max(1, Math.round((Date.now() - at.getTime()) / 60_000));
+        const ago =
+          minutes < 60
+            ? `${minutes}m`
+            : minutes < 1440
+              ? `${Math.round(minutes / 60)}h`
+              : `${Math.round(minutes / 1440)}d`;
+        return {
+          id: n.id,
+          kind: (n.kind as NotificationKind) ?? 'job',
+          title: n.title,
+          body: n.body ?? '',
+          ago,
+          today: at >= startOfToday,
+          href: n.href,
+          // Read state is not tracked server-side yet, so everything arrives
+          // unread rather than pretending to remember.
+          read: false,
+        };
+      }),
+    );
+  }, []);
+
+  /**
+   * Places this person has actually asked about, newest first.
+   *
+   * Replaces a hardcoded list of Lagos landmarks that every account saw as
+   * "Saved places" — including somebody in Kano on their first day, who had
+   * saved nothing and lived nowhere near any of them.
+   */
+  const recentPlaces = useMemo(() => {
+    const seen = new Set<string>();
+    const places: Place[] = [];
+    for (const q of [...queries].reverse()) {
+      if (!q.place) continue;
+      const key = q.place.name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      places.push(q.place);
+      if (places.length >= 8) break;
+    }
+    return places;
+  }, [queries]);
+
+  /**
+   * Questions this person has asked before, for the compose suggestions.
+   *
+   * Their own come first: somebody checking the same filling station every
+   * morning should not have to retype it. Other people's open questions fill
+   * in behind, and are all a new account has.
+   */
+  const recentQuestions = useMemo(() => {
+    const seen = new Set<string>();
+    const asked: string[] = [];
+    for (const q of [...queries].reverse()) {
+      const key = q.question.trim().toLowerCase();
+      if (key.length === 0 || seen.has(key)) continue;
+      seen.add(key);
+      asked.push(q.question);
+      if (asked.length >= 6) break;
+    }
+    return asked;
+  }, [queries]);
+
+  const clearDispatchError = useCallback(() => setDispatchError(null), []);
 
   const setAlertPref = useCallback((key: keyof AlertPrefs, value: boolean) => {
     setAlertPrefs((prev) => ({ ...prev, [key]: value }));
@@ -1227,6 +1639,70 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // Big errands are restricted whether or not the asker ticked the box.
       const restricted = verifiedOnly || bounty >= VERIFIED_ONLY_ABOVE;
 
+      /**
+       * Create it, then lock the money. In that order, and both must land.
+       *
+       * The question is not a job anybody can see until fund() confirms — the
+       * server leaves `dispatched_at` null until then. That is deliberate:
+       * advertising a bounty before it is committed lets somebody post one,
+       * decline the signature, and send a verifier walking for money that was
+       * never taken from anyone.
+       */
+      void (async () => {
+        if (!hasApi) return;
+
+        const created = await dispatchQuestion({
+          text: query.question,
+          placeName: query.place?.name ?? 'Somewhere nearby',
+          area: query.place?.area ?? null,
+          state: query.place ? stateForArea(query.place.area) : null,
+          lat: query.place?.coords?.lat ?? null,
+          lng: query.place?.coords?.lng ?? null,
+          bounty,
+          deadlineMinutes,
+          visibility,
+          verifiedOnly: restricted,
+        });
+
+        if (!created.ok) {
+          setDispatchError(created.detail);
+          // Roll the local state back: nothing was sent, so it must not look
+          // as though something was.
+          setQueries((prev) =>
+            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null } : q)),
+          );
+          return;
+        }
+
+        setQueries((prev) =>
+          prev.map((q) => (q.id === id ? { ...q, serverId: created.data.id } : q)),
+        );
+
+        if (!created.data.needsFunding) {
+          void refreshJobs();
+          return;
+        }
+
+        const funded = await fundJobOnChain(created.data.id, signRef.current);
+
+        if (!funded.ok) {
+          setDispatchError(
+            funded.code === 'declined'
+              ? 'You cancelled the signature, so nothing was sent. Your money has not moved.'
+              : `The bounty could not be locked — ${funded.detail}`,
+          );
+          setQueries((prev) =>
+            prev.map((q) => (q.id === id ? { ...q, dispatchedAt: null } : q)),
+          );
+          return;
+        }
+
+        // Locked. Only now is it a job.
+        void refreshJobs();
+        void refreshMyQuestionsRef.current?.();
+        void refreshWalletRef.current?.();
+      })();
+
       setQueries((prev) =>
         prev.map((q) =>
           q.id === id
@@ -1235,51 +1711,73 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ),
       );
 
-      // The money leaves the wallet now and is held until the question is
-      // answered or the asker closes it. Without a hold, a later refund
-      // would be inventing money.
-      setWalletHistory((prev) => [
-        {
-          id: `hold-${id}`,
-          amount: bounty,
-          description: `Held for "${query.question}"`,
-          createdAt: dispatchedAt,
-          pending: false,
-          type: 'hold',
-        },
-        ...prev,
-      ]);
-
-      // Paying for it is what puts the job on the Earn board. Guarded so a
-      // second press cannot post the same question twice.
-      setNearbyTasks((prev) => {
-        if (prev.some((t) => t.fromQueryId === id)) return prev;
-        return [
-          taskFromQuery(
-            { ...query, bounty, visibility, deadlineMinutes, dispatchedAt, verifiedOnly: restricted },
-            bounty,
-            firstNameFrom(user?.email),
-          ),
-          ...prev,
-        ];
-      });
+      /**
+       * No optimistic hold, and no optimistic board entry.
+       *
+       * Both used to be written here, before the money moved. The ledger
+       * showed a hold against a bounty that might never be locked, and the
+       * Earn board showed a job that might never be funded — which is exactly
+       * the state that lets a verifier walk somewhere for nothing.
+       *
+       * The server writes both when fund() confirms, and refreshJobs and
+       * refreshWallet bring them back. A moment's delay is the honest cost of
+       * only showing what is true.
+       */
     },
     [user?.email],
   );
 
-  const closeQuery = useCallback((id: string) => {
+  /**
+   * Closes the question and takes the bounty back — on the server, which is
+   * where the money is.
+   *
+   * This wrote a local `closed` flag and a local refund row and stopped there.
+   * `closeQuestion` existed and was never called, so nothing was refunded,
+   * nothing was closed, and the next refreshMyQuestions brought the question
+   * back open with the money still held. The refund button appeared to do
+   * something and did nothing.
+   */
+  const closeQuery = useCallback(async (id: string) => {
     const query = queriesRef.current.find((q) => q.id === id);
-    if (!query || query.closed) return;
+    if (!query || query.closed) return { ok: false as const };
 
     // Evidence in hand means somebody already did the walking, so the money
     // is no longer the asker's to take back.
     const job = tasksRef.current.find((t) => t.fromQueryId === id);
-    if (job?.status === 'completed') return;
+    if (job?.status === 'completed') {
+      return { ok: false as const, detail: 'An answer already came back.' };
+    }
+
+    /**
+     * Nor is a query the asker's to end by refunding it.
+     *
+     * The server refuses this too; refusing here as well keeps the local
+     * ledger from showing a refund the database never wrote.
+     */
+    if (taskPhase(query.taskStatus) === 'queried') {
+      return { ok: false as const, detail: 'A reviewer decides this one.' };
+    }
 
     setQueries((prev) => prev.map((q) => (q.id === id ? { ...q, closed: true } : q)));
 
     // Pull the job off the board so nobody sets out for money that has gone.
     setNearbyTasks((prev) => prev.filter((t) => t.fromQueryId !== id));
+
+    if (hasApi) {
+      const query2 = queriesRef.current.find((q) => q.id === id);
+      const serverId = query2?.serverId;
+      if (serverId) {
+        const closed = await closeQuestionOnServer(serverId);
+        if (!closed.ok) {
+          // Put it back rather than leaving a question this device alone
+          // believes is closed and refunded.
+          setQueries((prev) => prev.map((q) => (q.id === id ? { ...q, closed: false } : q)));
+          return { ok: false as const, detail: closed.detail };
+        }
+        void refreshWalletRef.current?.();
+        void refreshMyQuestionsRef.current?.();
+      }
+    }
 
     setWalletHistory((prev) => [
       {
@@ -1292,6 +1790,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       },
       ...prev,
     ]);
+
+    return { ok: true as const };
   }, []);
 
   const openDispute = useCallback(
@@ -1317,6 +1817,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             bounty: input.bounty,
             askerName: firstNameFrom(user?.email),
             askerReason: input.reason,
+            // openDispute is only ever reached from the tracking screen, which
+            // is the asker's. A verifier's side of a dispute has to arrive from
+            // the server, and no route serves one yet.
+            answer: null,
+            role: 'asker' as const,
             verifierName: input.verifierName,
             verifierReply: null,
             evidence: input.evidence,
@@ -1331,14 +1836,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [user?.email],
   );
 
-  const replyToDispute = useCallback((id: string, reply: string) => {
+  /**
+   * Sends the verifier's side to the server, not just to this screen.
+   *
+   * This only ever wrote to local state. The route and the API function both
+   * existed and neither was called, so the reply survived exactly until
+   * refreshDisputes replaced the list with the server's copy — which had no
+   * reply — and the verifier was asked to write it again. Every time.
+   */
+  const replyToDispute = useCallback(async (id: string, reply: string) => {
+    const dispute = disputesRef.current.find((d) => d.id === id);
+    if (!dispute || dispute.status !== 'awaiting_verifier') return { ok: false as const };
+
+    // Optimistic, so the card changes under their hand rather than after a
+    // round trip. Reconciled by the refresh either way.
     setDisputes((prev) =>
       prev.map((d) =>
-        d.id === id && d.status === 'awaiting_verifier'
-          ? { ...d, verifierReply: reply, status: 'awaiting_admin' }
-          : d,
+        d.id === id ? { ...d, verifierReply: reply, status: 'awaiting_admin' } : d,
       ),
     );
+
+    if (!hasApi) return { ok: true as const };
+
+    // Keyed by the question, which is what the route matches on.
+    const sent = await replyToDisputeOnServer(dispute.queryId, reply);
+    if (!sent.ok) {
+      // Put it back rather than leaving a reply that only this device believes.
+      setDisputes((prev) =>
+        prev.map((d) =>
+          d.id === id ? { ...d, verifierReply: null, status: 'awaiting_verifier' } : d,
+        ),
+      );
+      return { ok: false as const, detail: sent.detail };
+    }
+    return { ok: true as const };
   }, []);
 
   const resolveDispute = useCallback(
@@ -1400,16 +1931,64 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ]);
   }, []);
 
-  const acceptTask = useCallback((taskId: string) => {
-    setNearbyTasks((prev) =>
-      prev.map((t) =>
-        // One verifier per job. Anything already taken stays taken, so a
-        // second person cannot walk to the same place for the same money.
-        t.id === taskId && t.status === 'available'
-          ? { ...t, status: 'accepted' as const }
-          : t,
-      ),
-    );
+  const acceptTask = useCallback(async (taskId: string, at: { lat: number; lng: number }) => {
+    /**
+     * Claim it on the server first.
+     *
+     * The unique constraint on tasks.question_id is what actually decides who
+     * got there first — without this call two people both see "accepted" on
+     * their own device and both walk to the same place, and only one can be
+     * paid.
+     */
+    if (!hasApi) return { ok: true };
+
+    const result = await acceptJobOnServer(taskId, at);
+    if (!result.ok) {
+      /**
+       * Refused, and the reason is now handed back rather than logged.
+       *
+       * These used to be dropped off the board on any failure, which is right
+       * for "somebody else got it" and wrong for "you are too far away" — the
+       * job is still there and still available, just not to you from here.
+       * Only remove it when it has genuinely gone.
+       */
+      if (result.code !== 'too_far' && result.code !== 'location_required') {
+        setNearbyTasks((prev) => prev.filter((t) => t.id !== taskId));
+      }
+      return { ok: false, detail: result.detail };
+    }
+
+    // Both lists: it leaves the board and joins the taken pile. Without the
+    // second call the job disappears entirely the moment /nearby drops it.
+    void refreshJobs();
+    void refreshMyJobs();
+    return { ok: true };
+
+    // Moved immediately so the task screen still has it while those land.
+    setNearbyTasks((prev) => {
+      const job = prev.find((t) => t.id === taskId);
+      if (job) setMyJobs((mine) => (mine.some((m) => m.id === taskId) ? mine : [{ ...job, status: 'accepted' }, ...mine]));
+      return prev.map((t) => (t.id === taskId ? { ...t, status: 'accepted' as const } : t));
+    });
+  }, []);
+
+  /**
+   * Gives a taken job back to the board.
+   *
+   * Both lists move: it leaves the taken pile and rejoins the board. Doing
+   * only the first would make it vanish from the verifier's app while still
+   * being invisible to everybody else until the next refresh.
+   */
+  const abandonTask = useCallback(async (taskId: string) => {
+    if (!hasApi) return { ok: true as const };
+
+    const gone = await abandonJob(taskId);
+    if (!gone.ok) return { ok: false as const, detail: gone.detail };
+
+    setMyJobs((mine) => mine.filter((t) => t.id !== taskId));
+    void refreshJobs();
+    void refreshMyJobs();
+    return { ok: true as const };
   }, []);
 
   const completeTask = useCallback((taskId: string, reward: number, description: string) => {
@@ -1426,22 +2005,73 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   return (
     <AppContext.Provider
       value={{
-        user, identity, refreshIdentity, wallet, setWallet, locationFilter,
+        user, identity, refreshIdentity, registerSignOut, registerSigner, wallet, setWallet, locationFilter,
         homeArea, setHomeArea, profile, updateProfile, onboarded, finishOnboarding,
         accountLoaded, setAccountLoaded,
         jobsDone, questionsAsked, totalDepositedUsdc, walletLoaded, refreshWallet,
         alertPrefs, setAlertPref, applyPreferences,
         answersPublicByDefault, setAnswersPublicByDefault: setAnswersPublic,
-        questionsNearby: forArea(FEED_QUESTIONS, homeArea),
-        answeredNearby: forArea(FEED_ANSWERED, homeArea),
+        // Open jobs double as "questions nearby": both are other people's
+        // real questions, seen from the two sides of the same list.
+        questionsNearby: nearbyTasks.map((t) => ({
+          id: t.id,
+          text: t.title,
+          area: t.area,
+          state: stateForArea(t.area) ?? '',
+          placeName: t.location,
+        })),
+        answeredNearby: forArea(answeredFeed, homeArea),
+        myJobs, refreshMyJobs, refreshMyQuestions,
+        recentPlaces, recentQuestions,
+        dispatchError, clearDispatchError,
+        refreshJobs,
+        refreshDisputes,
+        refreshAnswered,
+        refreshNotifications,
+        feedLoaded,
 
         // Only paid questions: an unpaid one has nobody working on it and so
         // has nothing to follow.
-        activeQuestions: paidQuestions.filter((q) => q.status !== 'answered'),
-        answeredQuestions: paidQuestions.filter((q) => q.status === 'answered'),
+        /**
+         * Still going, versus finished.
+         *
+         * A refunded or paid-out question has nothing left to do, so it moves
+         * to History rather than sitting at the top of Ask looking live.
+         */
+        /**
+         * Still yours to do something about — including the ones where the
+         * something is confirming evidence somebody already sent.
+         */
+        activeQuestions: paidQuestions.filter(
+          (q) => !q.closed && q.status !== 'answered' && q.status !== 'refunded',
+        ),
+        /**
+         * Finished. 'delivered' deliberately is not here: evidence arriving is
+         * not the asker agreeing with it, and History is for what is over.
+         */
+        answeredQuestions: paidQuestions.filter(
+          (q) => q.closed || q.status === 'answered' || q.status === 'refunded',
+        ),
 
-        activeJobs: nearbyTasks.filter((t) => t.status === 'accepted'),
-        completedJobs: nearbyTasks.filter((t) => t.status === 'completed'),
+        // From the taken pile, not the board. A job leaves `nearbyTasks` when
+        // it is accepted, so filtering that list for accepted ones found
+        // nothing — which is why My jobs was always empty.
+        // Anything not yet confirmed is still the verifier's to watch —
+        // accepted and waiting to be done, or submitted and waiting to be paid.
+        // Working or delivered only. A queried job is finished work under
+        // review, and a settled one is done; neither is something to go and
+        // finish, and listing them here put the same task on Earn twice.
+        activeJobs: myJobs.filter((t) => isVerifierActive(taskPhase(t.serverStatus))),
+        completedJobs: myJobs.filter((t) => isFinished(taskPhase(t.serverStatus))),
+        /**
+         * Split out so the earner can see the shape of their work, the way the
+         * asker can. 'delivered' is waiting on somebody else, 'queried' is with
+         * a reviewer — neither is something to go and finish, and lumping them
+         * under one "active" heading is what made a queried job look like it
+         * still needed doing.
+         */
+        deliveredJobs: myJobs.filter((t) => taskPhase(t.serverStatus) === 'delivered'),
+        queriedJobs: myJobs.filter((t) => taskPhase(t.serverStatus) === 'queried'),
         notifications,
         unreadCount: notifications.filter((n) => !n.read).length,
         markNotificationRead,
@@ -1452,7 +2082,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         usdcBalance, balanceBlock, ngnPerUsd, refreshBalance,
         signIn, signOut, submitNin,
         setLocationFilter, depositUsdc, withdrawUsdc,
-        addQuery, dispatchQuery, closeQuery, tipVerifier, acceptTask, completeTask,
+        addQuery, dispatchQuery, closeQuery, tipVerifier, acceptTask, abandonTask, completeTask,
         disputes, openDispute, replyToDispute, resolveDispute,
         disputeForQuery: (queryId: string) =>
           disputes.find((d) => d.queryId === queryId) ?? null,

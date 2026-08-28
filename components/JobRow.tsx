@@ -50,7 +50,16 @@ export function JobRow({
         <Text style={[text.amount, { color: colors.money, fontSize: 16 }]}>
           ₦{formatNaira(verifierCut(task.reward))}
         </Text>
-        <Text style={[text.data, { color: tone }]}>{done ? 'Paid' : 'Finish'}</Text>
+        {/* Three states, not two. A submitted job said "Finish", which reads
+            as unfinished work and sends somebody back to a capture screen for
+            evidence they already sent. */}
+        <Text style={[text.data, { color: tone }]}>
+          {done
+            ? 'Paid'
+            : task.serverStatus === 'submitted'
+              ? 'With the asker'
+              : 'Finish'}
+        </Text>
       </View>
 
       {done ? (

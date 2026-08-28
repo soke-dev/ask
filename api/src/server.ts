@@ -7,6 +7,10 @@ import { authRouter } from './routes/auth.js';
 import { adminRouter } from './routes/admin.js';
 import { identityRouter } from './routes/identity.js';
 import { withdrawRouter } from './routes/withdraw.js';
+import { questionsRouter } from './routes/questions.js';
+import { tidyRouter } from './routes/tidy.js';
+import { pushRouter } from './routes/push.js';
+import { escrowRouter } from './routes/escrow.js';
 import { storageIsEphemeral } from './storage.js';
 import { attachRealtime, realtimeStatus } from './realtime.js';
 import { chainStatus } from './chain.js';
@@ -99,7 +103,11 @@ app.get('/health', async (_req, res) => {
 app.use('/auth', authRouter);
 app.use('/admin', adminRouter);
 app.use('/identity', identityRouter);
+app.use('/tidy', tidyRouter);
+app.use('/push', pushRouter);
 app.use('/withdraw', withdrawRouter);
+app.use('/questions', questionsRouter);
+app.use('/escrow', escrowRouter);
 app.use('/evidence', evidenceRouter);
 
 // Local media serving so a checked file can be looked at during development.
@@ -111,7 +119,7 @@ if (storageIsEphemeral) {
 app.use((_req, res) => res.status(404).json({ error: 'not_found' }));
 
 const server = app.listen(config.port, () => {
-  console.log(`ask-nearby api on :${config.port}`);
+  console.log(`confam api on :${config.port}`);
   if (!hasDatabase()) console.log('  DATABASE_URL unset — checks run but nothing is recorded');
   if (!hasPrivy()) console.log('  PRIVY_APP_ID/SECRET unset — every request is unauthenticated');
   if (!hasAdmin()) console.log('  ADMIN_PASSWORD_HASH unset — the review desk is unreachable');

@@ -2,10 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -17,6 +16,8 @@ import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
 import { useApp } from '@/contexts/AppContext';
+import { AreaPicker, type AreaChoice } from '@/components/AreaPicker';
+import { SheetKeyboardView } from '@/components/SheetKeyboardView';
 import { VERIFIED_ONLY_ABOVE, formatNaira } from '@/constants/money';
 import { apiFetch, hasApi } from '@/utils/api';
 
@@ -33,7 +34,7 @@ import { apiFetch, hasApi } from '@/utils/api';
  * gives nothing back until it is explained. An identity wall on first launch
  * loses people who would have verified a week later.
  */
-type Step = 'username' | 'identity';
+type Step = 'username' | 'area' | 'identity';
 
 /** A username has to survive being in a URL and being typed by a stranger. */
 function cleanUsername(raw: string): string {
@@ -49,8 +50,16 @@ const MIN_USERNAME = 3;
 export function WelcomeSheet() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { user, profile, updateProfile, onboarded, finishOnboarding, identity, accountLoaded } =
-    useApp();
+  const {
+    user,
+    profile,
+    updateProfile,
+    onboarded,
+    finishOnboarding,
+    identity,
+    accountLoaded,
+    setHomeArea,
+  } = useApp();
 
   const [step, setStep] = useState<Step>('username');
   // Suggestion, not a stored value: prefer what the server has, fall back to
@@ -58,6 +67,15 @@ export function WelcomeSheet() {
   const [username, setUsername] = useState(() =>
     cleanUsername(profile.username || (user?.email ?? '').split('@')[0] || ''),
   );
+  /**
+   * Starts empty, never seeded.
+   *
+   * `homeArea` defaults to Ikeja so the rest of the app has something to
+   * filter on, but that is a placeholder rather than a choice. Seeding from it
+   * opened this picker already inside Lagos and offered a "Use Ikeja" button
+   * to somebody in Kano who had picked nothing at all.
+   */
+  const [choice, setChoice] = useState<AreaChoice | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -135,6 +153,34 @@ export function WelcomeSheet() {
     }
 
     updateProfile({ username });
+    setStep('area');
+  }
+
+  /**
+   * Records where they are, which decides which jobs they are shown.
+   *
+   * Asked here rather than left to a setting nobody opens: the Earn board
+   * filters on it, so somebody who never sets it either sees everything in
+   * the country or nothing at all. Changeable later, and said so.
+   */
+  async function saveArea() {
+    if (saving || !choice) return;
+    setSaving(true);
+
+    setHomeArea({ key: choice.lga.toLowerCase().replace(/\s+/g, '-'), label: choice.lga, state: choice.state });
+
+    if (hasApi) {
+      await apiFetch('/auth/me', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          homeArea: choice.lga,
+          homeState: choice.state,
+          homeCountry: choice.country,
+        }),
+      });
+    }
+
+    setSaving(false);
     setStep('identity');
   }
 
@@ -152,12 +198,16 @@ export function WelcomeSheet() {
   const translateY = slide.interpolate({ inputRange: [0, 1], outputRange: [420, 0] });
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={dismiss}>
+    <Modal
+      visible
+      transparent
+      animationType="fade"
+      onRequestClose={dismiss}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
       <View style={[styles.backdrop, { backgroundColor: colors.overlay }]}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.lift}
-        >
+        <SheetKeyboardView style={styles.lift}>
           <Animated.View
             style={[
               styles.sheet,
@@ -170,6 +220,20 @@ export function WelcomeSheet() {
             ]}
           >
             <View style={[styles.grabber, { backgroundColor: colors.border }]} />
+
+            {/*
+             * Capped and scrollable, for the reason the withdrawal sheet is:
+             * lifting a bottom-anchored sheet clear of the keyboard only helps
+             * while it still fits. The username step is tall enough that on a
+             * short screen it ran off the top instead, taking the field being
+             * typed into with it.
+             */}
+            <ScrollView
+              style={styles.bodyScroll}
+              contentContainerStyle={styles.body}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
 
             {step === 'username' ? (
               <>
@@ -241,6 +305,49 @@ export function WelcomeSheet() {
                   </Text>
                 </Pressable>
               </>
+            ) : step === 'area' ? (
+              <>
+                <Text style={[text.label, { color: colors.accent }]}>Where you are</Text>
+                <Text style={[text.display, { color: colors.foreground, marginTop: 6 }]}>
+                  Which area?
+                </Text>
+                {/* Three lines of explanation above a scrolling list left no
+                    room to breathe. The picker labels each step itself, so
+                    this only has to say why it is being asked. */}
+                <Text style={[text.body, { color: colors.mutedForeground, marginTop: 6 }]}>
+                  So we can show you jobs nearby. Changeable any time.
+                </Text>
+
+                <AreaPicker
+                  value={choice}
+                  onChange={(picked) => setChoice(picked)}
+                />
+
+                <Pressable
+                  onPress={saveArea}
+                  disabled={saving || !choice}
+                  style={({ pressed }) => [
+                    styles.primaryBtn,
+                    {
+                      backgroundColor: choice ? colors.primary : colors.sunken,
+                      opacity: pressed || saving ? 0.85 : 1,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      text.action,
+                      { color: choice ? colors.primaryForeground : colors.faintForeground },
+                    ]}
+                  >
+                    {saving ? 'Saving' : choice ? `Use ${choice.lga}` : 'Pick your area'}
+                  </Text>
+                </Pressable>
+
+                <Pressable onPress={dismiss} style={styles.skip}>
+                  <Text style={[text.action, { color: colors.mutedForeground }]}>Not now</Text>
+                </Pressable>
+              </>
             ) : (
               <>
                 <View style={[styles.badge, { borderColor: colors.primary }]}>
@@ -305,8 +412,9 @@ export function WelcomeSheet() {
                 </Pressable>
               </>
             )}
+            </ScrollView>
           </Animated.View>
-        </KeyboardAvoidingView>
+        </SheetKeyboardView>
       </View>
     </Modal>
   );
@@ -323,7 +431,13 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 4,
     paddingHorizontal: 22,
     paddingTop: 12,
+    // Never taller than what the keyboard leaves behind.
+    maxHeight: '92%',
   },
+  // flexShrink so the scroll view yields to the cap instead of insisting on
+  // its content height and defeating it.
+  bodyScroll: { flexShrink: 1 },
+  body: { paddingBottom: 4 },
   grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
   handleRow: {
     flexDirection: 'row',

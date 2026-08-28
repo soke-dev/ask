@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
+  InputAccessoryView,
+  Keyboard,
   Modal,
   Platform,
   Pressable,
@@ -25,6 +27,19 @@ import { useApp } from '@/contexts/AppContext';
 import { useSignAuthorization } from '@/utils/privy';
 import { apiFetch } from '@/utils/api';
 import { useThemeMode, type ThemeMode } from '@/contexts/ThemeContext';
+import { AddressScanner } from '@/components/AddressScanner';
+import { SendingIndicator } from '@/components/SendingIndicator';
+import { SheetKeyboardView } from '@/components/SheetKeyboardView';
+
+/**
+ * Ties the amount field to its Done bar.
+ *
+ * iOS gives decimal-pad no return key, so once the keypad is up there is no
+ * key on it that puts it away — and the only thing behind this sheet is a
+ * backdrop that closes the whole withdrawal. Android is unaffected: its
+ * numeric keyboard carries its own dismiss.
+ */
+const AMOUNT_ACCESSORY_ID = 'withdraw-amount-accessory';
 
 const THEME_OPTIONS: { value: ThemeMode; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { value: 'system', label: 'Auto', icon: 'phone-portrait-outline' },
@@ -35,14 +50,13 @@ const THEME_OPTIONS: { value: ThemeMode; label: string; icon: keyof typeof Ionic
 const SETTINGS: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
-  href: '/edit-profile' | '/alerts' | '/privacy' | '/help' | '/about' | '/admin';
+  href: '/edit-profile' | '/alerts' | '/privacy' | '/help' | '/about';
 }[] = [
   { icon: 'person-circle-outline', label: 'Edit profile', href: '/edit-profile' },
   { icon: 'notifications-outline', label: 'Alerts', href: '/alerts' },
   { icon: 'lock-closed-outline', label: 'Privacy & security', href: '/privacy' },
   { icon: 'chatbubble-ellipses-outline', label: 'Get help', href: '/help' },
-  { icon: 'information-circle-outline', label: 'About Ask Nearby', href: '/about' },
-  { icon: 'shield-half-outline', label: 'Review desk · internal', href: '/admin' },
+  { icon: 'information-circle-outline', label: 'About Confam', href: '/about' },
 ];
 
 export default function YouScreen() {
@@ -72,12 +86,16 @@ export default function YouScreen() {
   const topPad = Platform.OS === 'web' ? 22 : insets.top + 6;
 
   const [receiveOpen, setReceiveOpen] = useState(false);
+  // Set when Share was tapped from inside the Receive sheet: the share is
+  // owed once that sheet has finished dismissing. See handleShareAddress.
+  const [shareOnDismiss, setShareOnDismiss] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [destination, setDestination] = useState<'wallet' | 'bank'>('wallet');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [toAddress, setToAddress] = useState('');
+  const [scanOpen, setScanOpen] = useState(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [withdrawing, setWithdrawing] = useState(false);
   /**
@@ -305,9 +323,15 @@ export default function YouScreen() {
     setTimeout(() => setCopied(false), 1600);
   }
 
-  async function handleShareAddress() {
+  /**
+   * Puts the address in front of whoever needs it.
+   *
+   * Kept separate from the button so it can be fired either immediately or
+   * once the Receive sheet has finished getting out of the way.
+   */
+  async function doShareAddress() {
     if (!walletAddress) return;
-    const message = `My Ask Nearby wallet (USDC on Base): ${walletAddress}`;
+    const message = `My Confam wallet (USDC on Base): ${walletAddress}`;
     try {
       if (Platform.OS === 'web') {
         // RN Web has no Share; the Web Share API exists only in some browsers,
@@ -317,11 +341,78 @@ export default function YouScreen() {
         else await handleCopyAddress();
         return;
       }
-      await Share.share({ message });
-    } catch {
-      // A dismissed share sheet is not a failure worth reporting.
+      const result = await Share.share({ message });
+      if (__DEV__) console.log('[share] resolved:', JSON.stringify(result));
+    } catch (error) {
+      /**
+       * Dismissing the sheet resolves with `dismissedAction` rather than
+       * throwing, and the browser reports the same as an AbortError. Anything
+       * else here is a real failure, and swallowing those is what made this
+       * button look dead rather than broken.
+       */
+      if ((error as { name?: string })?.name === 'AbortError') return;
+      if (__DEV__) console.warn('[share] could not open the share sheet:', error);
+
+      // The address is the whole point of the screen, so a share that will not
+      // open must still leave it on the clipboard rather than nothing at all.
+      await handleCopyAddress();
     }
   }
+
+  /**
+   * iOS will not present the share sheet while the Receive sheet is up.
+   *
+   * UIActivityViewController presents from the topmost view controller, and a
+   * React Native Modal is one — already presenting. iOS declines, and since
+   * the completion handler never fires, `Share.share` neither resolves nor
+   * rejects. It hangs, which is why there was no sheet and nothing to catch.
+   *
+   * Waiting a fixed number of milliseconds for the dismissal was a guess, and
+   * it was wrong. `onDismiss` is the actual signal that the presentation
+   * context has been handed back, so the share is queued and fired from there.
+   *
+   * None of this applies to Android, where the chooser is an Intent and has no
+   * presentation context to contend for — so it shares in place and the sheet
+   * stays open behind it.
+   */
+  function handleShareAddress() {
+    if (!walletAddress) return;
+
+    if (Platform.OS !== 'ios' || !receiveOpen) {
+      void doShareAddress();
+      return;
+    }
+
+    setShareOnDismiss(true);
+    setReceiveOpen(false);
+  }
+
+  /**
+   * The backstop for the share owed to a sheet that has closed.
+   *
+   * `onDismiss` is the right signal and fires first when it fires at all — but
+   * it is iOS-only and undocumented for transparent modals, so nothing should
+   * depend on it alone. This runs after the render that set `receiveOpen`
+   * false, which is the part the earlier fixed delay got wrong: awaiting
+   * inside the handler started counting before React had re-rendered, so the
+   * wait could elapse before the sheet began dismissing at all.
+   *
+   * Whichever path arrives first clears the flag, and the other then does
+   * nothing.
+   */
+  useEffect(() => {
+    if (!shareOnDismiss || receiveOpen) return;
+
+    const timer = setTimeout(() => {
+      setShareOnDismiss(false);
+      void doShareAddress();
+    }, 450);
+
+    return () => clearTimeout(timer);
+    // doShareAddress is redeclared every render and is not worth a ref here;
+    // it only ever reads walletAddress, which cannot change mid-dismissal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shareOnDismiss, receiveOpen]);
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
@@ -488,6 +579,7 @@ export default function YouScreen() {
               onPress={() => setReceiveOpen(true)}
               style={({ pressed }) => [
                 styles.primaryBtn,
+                styles.btnFill,
                 { backgroundColor: colors.foreground, opacity: pressed ? 0.88 : 1 },
               ]}
             >
@@ -497,6 +589,7 @@ export default function YouScreen() {
               onPress={() => setWithdrawOpen(true)}
               style={({ pressed }) => [
                 styles.outlineBtn,
+                styles.btnFill,
                 { borderColor: colors.borderStrong, opacity: pressed ? 0.7 : 1 },
               ]}
             >
@@ -609,7 +702,7 @@ export default function YouScreen() {
           })}
         </View>
         <Text style={[text.bodySmall, { color: colors.faintForeground, marginTop: 8 }]}>
-          Auto follows your device. Ask Nearby is designed as a dark board, so Auto shows dark
+          Auto follows your device. Confam is designed as a dark board, so Auto shows dark
           unless your device explicitly asks for light.
         </Text>
 
@@ -634,285 +727,405 @@ export default function YouScreen() {
         transparent
         animationType="slide"
         onRequestClose={dismissWithdraw}
+        // Must match SheetKeyboardView's provider, or the keyboard insets are
+        // measured against different bounds than the sheet is laid out in.
+        statusBarTranslucent
+        navigationBarTranslucent
       >
         <Pressable
           style={[styles.backdrop, { backgroundColor: colors.overlay }]}
           onPress={dismissWithdraw}
         >
-          <Pressable
-            onPress={(e) => e.stopPropagation()}
-            style={[
-              styles.sheet,
-              {
-                backgroundColor: colors.background,
-                borderColor: colors.borderStrong,
-                paddingBottom: (Platform.OS === 'web' ? 24 : insets.bottom) + 24,
-              },
-            ]}
-          >
-            <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
-
-            {withdrawStep === 'form' && (
-              <>
-            <Text style={[text.title, { color: colors.foreground }]}>Withdraw</Text>
-
-            <View style={[styles.balanceBox, { borderColor: colors.border }]}>
-              <Text style={[text.label, { color: colors.faintForeground }]}>Available</Text>
-              <Text style={[text.amountLarge, { color: colors.foreground, fontSize: 30 }]}>
-                {usdcBalance === null ? '—' : `$${usdcBalance.toFixed(2)}`}
-              </Text>
-            </View>
-
-            {/* ── Where to ─────────────────────────────────────────── */}
-            <Text style={[text.label, { color: colors.faintForeground, marginTop: 4 }]}>
-              Send to
-            </Text>
-            <View style={styles.destRow}>
-              <Pressable
-                onPress={() => setDestination('wallet')}
-                style={[
-                  styles.dest,
-                  {
-                    borderColor: destination === 'wallet' ? colors.foreground : colors.border,
-                    backgroundColor: destination === 'wallet' ? colors.sunken : 'transparent',
-                  },
-                ]}
-              >
-                <Ionicons name="wallet-outline" size={16} color={colors.foreground} />
-                <Text style={[text.subheading, { color: colors.foreground }]}>Crypto wallet</Text>
-                <Text style={[text.data, { color: colors.faintForeground }]}>USDC on Base</Text>
-              </Pressable>
-
-              <View style={[styles.dest, styles.destLocked, { borderColor: colors.border }]}>
-                <Ionicons name="lock-closed" size={16} color={colors.faintForeground} />
-                <Text style={[text.subheading, { color: colors.faintForeground }]}>Local bank</Text>
-                <Text style={[text.data, { color: colors.pending }]}>Naira · coming soon</Text>
-              </View>
-            </View>
-
-            {/* ── How much ─────────────────────────────────────────── */}
-            <View style={styles.amountHead}>
-              <Text style={[text.label, { color: colors.faintForeground, flex: 1 }]}>Amount</Text>
-              <Pressable onPress={() => setWithdrawAmount(String(usdcBalance))} hitSlop={8}>
-                <Text style={[text.action, { fontSize: 11, color: colors.accent }]}>Max</Text>
-              </Pressable>
-            </View>
-
-            <View style={[styles.amountField, { borderColor: colors.borderStrong }]}>
-              <Text style={[styles.amountPrefix, { color: colors.mutedForeground }]}>$</Text>
-              <TextInput
-                style={[styles.amountInput, { color: colors.foreground }]}
-                value={withdrawAmount}
-                onChangeText={(v) => setWithdrawAmount(v.replace(/[^0-9.]/g, '').slice(0, 10))}
-                keyboardType="decimal-pad"
-                placeholder="0.00"
-                placeholderTextColor={colors.faintForeground}
-              />
-              <Text style={[text.data, { color: colors.faintForeground }]}>USDC</Text>
-            </View>
-
-            {/* ── Where exactly ────────────────────────────────────── */}
-            <Text style={[text.label, { color: colors.faintForeground, marginTop: 4 }]}>
-              Destination address
-            </Text>
-            <TextInput
-              style={[
-                styles.addressField,
-                {
-                  color: colors.foreground,
-                  backgroundColor: colors.surface,
-                  borderColor: toAddress.length === 0 || addressValid ? colors.border : colors.danger,
-                },
-              ]}
-              value={toAddress}
-              onChangeText={setToAddress}
-              placeholder="0x…"
-              placeholderTextColor={colors.faintForeground}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-            <Text
-              style={[
-                text.data,
-                { color: withdrawError ? colors.danger : colors.faintForeground, marginTop: 6 },
-              ]}
-            >
-              {withdrawError ??
-                'Base network only. Sending to an address on another chain loses the money.'}
-            </Text>
-
+          {/*
+           * The amount and address fields sit low in a sheet anchored to the
+           * bottom of the screen, so the keypad opened straight over them.
+           *
+           * Same treatment as PlacePicker: lift the whole sheet rather than
+           * scroll within it, because this one has no scroll view and its
+           * content is short enough to clear the keyboard whole.
+           */}
+          <SheetKeyboardView style={styles.lift}>
             <Pressable
-              onPress={handleWithdraw}
-              disabled={!canWithdraw}
-              style={({ pressed }) => [
-                styles.primaryBtn,
+              onPress={(e) => e.stopPropagation()}
+              style={[
+                styles.sheet,
                 {
-                  backgroundColor: canWithdraw ? colors.primary : colors.sunken,
-                  opacity: pressed ? 0.88 : 1,
-                  paddingVertical: 16,
-                  marginTop: 14,
+                  backgroundColor: colors.background,
+                  borderColor: colors.borderStrong,
+                  paddingBottom: (Platform.OS === 'web' ? 24 : insets.bottom) + 24,
                 },
               ]}
             >
-              <Text
-                style={[
-                  text.action,
-                  { color: canWithdraw ? colors.primaryForeground : colors.faintForeground },
-                ]}
+              <View style={[styles.grabber, { backgroundColor: colors.borderStrong }]} />
+              {/*
+               * The steps scroll; the sheet does not grow past the screen.
+               *
+               * Lifting the sheet clear of the keyboard is only half of it. On
+               * a short screen the form is taller than what is left once the
+               * keypad is up, and a sheet pinned to the bottom that cannot
+               * shrink runs off the top instead — the balance and the address
+               * field ended up behind the status bar.
+               *
+               * maxHeight caps it and this scroll view absorbs the difference,
+               * so the part you are typing into stays reachable.
+               */}
+              <ScrollView
+                style={styles.sheetScroll}
+                contentContainerStyle={styles.sheetContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
               >
-                {withdrawAmountValue > 0
-                  ? `Review $${withdrawAmountValue.toFixed(2)}`
-                  : 'Review'}
-              </Text>
-            </Pressable>
-              </>
-            )}
 
-            {withdrawStep === 'confirm' && (
-              <>
-                <Text style={[text.title, { color: colors.foreground }]}>Confirm</Text>
-                <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 4 }]}>
-                  Check the address. A transfer cannot be reversed or recalled.
-                </Text>
+                {withdrawStep === 'form' && (
+                  <>
+                <Text style={[text.title, { color: colors.foreground }]}>Withdraw</Text>
 
                 <View style={[styles.balanceBox, { borderColor: colors.border }]}>
-                  <Text style={[text.label, { color: colors.faintForeground }]}>Sending</Text>
+                  <Text style={[text.label, { color: colors.faintForeground }]}>Available</Text>
                   <Text style={[text.amountLarge, { color: colors.foreground, fontSize: 30 }]}>
-                    ${withdrawAmountValue.toFixed(2)}
+                    {usdcBalance === null ? '—' : `$${usdcBalance.toFixed(2)}`}
                   </Text>
-                  {ngnPerUsd !== null && (
-                    <Text style={[text.data, { color: colors.mutedForeground }]}>
-                      ≈ ₦{Math.round(withdrawAmountValue * ngnPerUsd).toLocaleString()}
-                    </Text>
+                </View>
+
+                {/* ── Where to ─────────────────────────────────────────── */}
+                <Text style={[text.label, { color: colors.faintForeground, marginTop: 4 }]}>
+                  Send to
+                </Text>
+                <View style={styles.destRow}>
+                  <Pressable
+                    onPress={() => setDestination('wallet')}
+                    style={[
+                      styles.dest,
+                      {
+                        borderColor: destination === 'wallet' ? colors.foreground : colors.border,
+                        backgroundColor: destination === 'wallet' ? colors.sunken : 'transparent',
+                      },
+                    ]}
+                  >
+                    <View style={styles.destHead}>
+                      <Ionicons name="wallet-outline" size={16} color={colors.foreground} />
+                      <Text style={[text.subheading, { color: colors.foreground, flex: 1 }]}>
+                        Crypto wallet
+                      </Text>
+                    </View>
+                    <Text style={[text.data, { color: colors.faintForeground }]}>USDC on Base</Text>
+                  </Pressable>
+
+                  <View style={[styles.dest, styles.destLocked, { borderColor: colors.border }]}>
+                    <View style={styles.destHead}>
+                      <Ionicons name="lock-closed" size={16} color={colors.faintForeground} />
+                      <Text style={[text.subheading, { color: colors.faintForeground, flex: 1 }]}>
+                        Local bank
+                      </Text>
+                    </View>
+                    <Text style={[text.data, { color: colors.pending }]}>Naira · coming soon</Text>
+                  </View>
+                </View>
+
+                {/* ── How much ─────────────────────────────────────────── */}
+                <View style={styles.amountHead}>
+                  <Text style={[text.label, { color: colors.faintForeground, flex: 1 }]}>Amount</Text>
+                  <Pressable onPress={() => setWithdrawAmount(String(usdcBalance))} hitSlop={8}>
+                    <Text style={[text.action, { fontSize: 11, color: colors.accent }]}>Max</Text>
+                  </Pressable>
+                </View>
+
+                <View style={[styles.amountField, { borderColor: colors.borderStrong }]}>
+                  <Text style={[styles.amountPrefix, { color: colors.mutedForeground }]}>$</Text>
+                  <TextInput
+                    style={[styles.amountInput, { color: colors.foreground }]}
+                    value={withdrawAmount}
+                    onChangeText={(v) => setWithdrawAmount(v.replace(/[^0-9.]/g, '').slice(0, 10))}
+                    keyboardType="decimal-pad"
+                    placeholder="0.00"
+                    placeholderTextColor={colors.faintForeground}
+                    inputAccessoryViewID={
+                      Platform.OS === 'ios' ? AMOUNT_ACCESSORY_ID : undefined
+                    }
+                  />
+                  <Text style={[text.data, { color: colors.faintForeground }]}>USDC</Text>
+                </View>
+
+                {/* ── Where exactly ────────────────────────────────────── */}
+                <Text style={[text.label, { color: colors.faintForeground, marginTop: 4 }]}>
+                  Destination address
+                </Text>
+                <View style={styles.addressRow}>
+                  <TextInput
+                    style={[
+                      styles.addressField,
+                      {
+                        color: colors.foreground,
+                        backgroundColor: colors.surface,
+                        borderColor:
+                          toAddress.length === 0 || addressValid ? colors.border : colors.danger,
+                      },
+                    ]}
+                    value={toAddress}
+                    onChangeText={setToAddress}
+                    placeholder="0x…"
+                    placeholderTextColor={colors.faintForeground}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  {/*
+                   * Forty hex characters is the one field nobody can proof-read,
+                   * and retyping it by eye off another phone is how money goes to
+                   * an address that does not exist.
+                   *
+                   * Native only: the sheet is reachable in a desktop browser,
+                   * where there is usually no camera worth opening and pasting is
+                   * easy anyway.
+                   */}
+                  {Platform.OS !== 'web' && (
+                    <Pressable
+                      onPress={() => {
+                        setWithdrawError(null);
+                        setScanOpen(true);
+                      }}
+                      hitSlop={6}
+                      accessibilityLabel="Scan a wallet QR code"
+                      style={({ pressed }) => [
+                        styles.scanButton,
+                        {
+                          backgroundColor: colors.surface,
+                          borderColor: colors.border,
+                          opacity: pressed ? 0.6 : 1,
+                        },
+                      ]}
+                    >
+                      <Ionicons name="qr-code-outline" size={19} color={colors.accent} />
+                    </Pressable>
                   )}
                 </View>
 
-                <Text style={[text.label, { color: colors.faintForeground, marginTop: 16 }]}>
-                  To this address
+                <Text
+                  style={[
+                    text.data,
+                    { color: withdrawError ? colors.danger : colors.faintForeground, marginTop: 6 },
+                  ]}
+                >
+                  {withdrawError ??
+                    'Base network only. Sending to an address on another chain loses the money.'}
                 </Text>
-                {/* Shown in full and never truncated: the middle of an address
-                    is exactly where a substitution would hide. */}
-                <View style={[styles.confirmAddress, { borderColor: colors.borderStrong }]}>
-                  <Text style={[styles.address, { color: colors.foreground }]} selectable>
-                    {toAddress.trim()}
-                  </Text>
-                </View>
-
-                <View style={[styles.feeRow, { borderColor: colors.border }]}>
-                  <Ionicons name="flash-outline" size={15} color={colors.primary} />
-                  <Text style={[text.bodySmall, { color: colors.mutedForeground, flex: 1 }]}>
-                    <Text style={{ color: colors.primary }}>No fee. </Text>
-                    We pay the network cost, so the full amount arrives.
-                  </Text>
-                </View>
-
-                {withdrawError && (
-                  <Text style={[text.bodySmall, { color: colors.danger, marginTop: 12 }]}>
-                    {withdrawError}
-                  </Text>
-                )}
 
                 <Pressable
-                  onPress={() => void sendWithdrawal()}
-                  disabled={withdrawing}
+                  onPress={handleWithdraw}
+                  disabled={!canWithdraw}
                   style={({ pressed }) => [
                     styles.primaryBtn,
                     {
-                      backgroundColor: colors.primary,
-                      opacity: pressed || withdrawing ? 0.85 : 1,
-                      paddingVertical: 16,
-                      marginTop: 16,
-                    },
-                  ]}
-                >
-                  <Text style={[text.action, { color: colors.primaryForeground }]}>
-                    {withdrawing ? 'Sending' : `Send $${withdrawAmountValue.toFixed(2)}`}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => !withdrawing && setWithdrawStep('form')}
-                  disabled={withdrawing}
-                  style={styles.backLink}
-                >
-                  <Text style={[text.action, { color: colors.mutedForeground }]}>Back</Text>
-                </Pressable>
-              </>
-            )}
-
-            {withdrawStep === 'sent' && receipt && (
-              <>
-                <View style={[styles.sentBadge, { borderColor: colors.primary }]}>
-                  <Ionicons name="checkmark" size={24} color={colors.primary} />
-                </View>
-
-                <Text style={[text.title, { color: colors.foreground, marginTop: 14 }]}>
-                  Sent
-                </Text>
-                <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 4 }]}>
-                  ${receipt.usdc.toFixed(2)} USDC is on its way. It usually lands within seconds.
-                </Text>
-
-                <View style={[styles.receiptBox, { borderColor: colors.border }]}>
-                  {[
-                    { k: 'Amount', v: `$${receipt.usdc.toFixed(2)}` },
-                    {
-                      k: 'To',
-                      v: `${receipt.to.slice(0, 10)}…${receipt.to.slice(-8)}`,
-                    },
-                    { k: 'Network', v: 'Base' },
-                    { k: 'Fee', v: 'None — we covered it' },
-                  ].map((row, i) => (
-                    <View
-                      key={row.k}
-                      style={[
-                        styles.receiptRow,
-                        i > 0 && { borderTopWidth: 1, borderTopColor: colors.border },
-                      ]}
-                    >
-                      <Text style={[text.bodySmall, { color: colors.mutedForeground, flex: 1 }]}>
-                        {row.k}
-                      </Text>
-                      <Text style={[text.data, { color: colors.foreground }]}>{row.v}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                {/* The transaction hash is the only independent proof this
-                    happened, so it is offered rather than merely mentioned. */}
-                <Pressable
-                  onPress={() => openTx(receipt.txHash)}
-                  style={({ pressed }) => [
-                    styles.explorerBtn,
-                    { borderColor: colors.borderStrong, opacity: pressed ? 0.8 : 1 },
-                  ]}
-                >
-                  <Ionicons name="open-outline" size={15} color={colors.foreground} />
-                  <Text style={[text.action, { color: colors.foreground }]}>
-                    View on BaseScan
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={dismissWithdraw}
-                  style={({ pressed }) => [
-                    styles.primaryBtn,
-                    {
-                      backgroundColor: colors.foreground,
+                      backgroundColor: canWithdraw ? colors.primary : colors.sunken,
                       opacity: pressed ? 0.88 : 1,
                       paddingVertical: 16,
-                      marginTop: 10,
+                      marginTop: 14,
                     },
                   ]}
                 >
-                  <Text style={[text.action, { color: colors.background }]}>Done</Text>
+                  <Text
+                    style={[
+                      text.action,
+                      { color: canWithdraw ? colors.primaryForeground : colors.faintForeground },
+                    ]}
+                  >
+                    {withdrawAmountValue > 0
+                      ? `Review $${withdrawAmountValue.toFixed(2)}`
+                      : 'Review'}
+                  </Text>
                 </Pressable>
-              </>
-            )}
+                  </>
+                )}
 
-          </Pressable>
+                {withdrawStep === 'confirm' && (
+                  <>
+                    <Text style={[text.title, { color: colors.foreground }]}>Confirm</Text>
+                    <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 4 }]}>
+                      Check the address. A transfer cannot be reversed or recalled.
+                    </Text>
+
+                    <View style={[styles.balanceBox, { borderColor: colors.border }]}>
+                      <Text style={[text.label, { color: colors.faintForeground }]}>Sending</Text>
+                      <Text style={[text.amountLarge, { color: colors.foreground, fontSize: 30 }]}>
+                        ${withdrawAmountValue.toFixed(2)}
+                      </Text>
+                      {ngnPerUsd !== null && (
+                        <Text style={[text.data, { color: colors.mutedForeground }]}>
+                          ≈ ₦{Math.round(withdrawAmountValue * ngnPerUsd).toLocaleString()}
+                        </Text>
+                      )}
+                    </View>
+
+                    <Text style={[text.label, { color: colors.faintForeground, marginTop: 16 }]}>
+                      To this address
+                    </Text>
+                    {/* Shown in full and never truncated: the middle of an address
+                        is exactly where a substitution would hide. */}
+                    <View style={[styles.confirmAddress, { borderColor: colors.borderStrong }]}>
+                      <Text style={[styles.address, { color: colors.foreground }]} selectable>
+                        {toAddress.trim()}
+                      </Text>
+                    </View>
+
+                    <View style={[styles.feeRow, { borderColor: colors.border }]}>
+                      <Ionicons name="flash-outline" size={15} color={colors.primary} />
+                      <Text style={[text.bodySmall, { color: colors.mutedForeground, flex: 1 }]}>
+                        <Text style={{ color: colors.primary }}>No fee. </Text>
+                        We pay the network cost, so the full amount arrives.
+                      </Text>
+                    </View>
+
+                    {withdrawError && (
+                      <Text style={[text.bodySmall, { color: colors.danger, marginTop: 12 }]}>
+                        {withdrawError}
+                      </Text>
+                    )}
+
+                    <Pressable
+                      onPress={() => void sendWithdrawal()}
+                      disabled={withdrawing}
+                      style={({ pressed }) => [
+                        styles.primaryBtn,
+                        {
+                          backgroundColor: colors.primary,
+                          opacity: pressed || withdrawing ? 0.85 : 1,
+                          paddingVertical: 16,
+                          marginTop: 16,
+                        },
+                      ]}
+                    >
+                      {withdrawing ? (
+                        <SendingIndicator label="Sending" color={colors.primaryForeground} />
+                      ) : (
+                        <Text style={[text.action, { color: colors.primaryForeground }]}>
+                          {`Send $${withdrawAmountValue.toFixed(2)}`}
+                        </Text>
+                      )}
+                    </Pressable>
+
+                    <Pressable
+                      onPress={() => !withdrawing && setWithdrawStep('form')}
+                      disabled={withdrawing}
+                      style={styles.backLink}
+                    >
+                      <Text style={[text.action, { color: colors.mutedForeground }]}>Back</Text>
+                    </Pressable>
+                  </>
+                )}
+
+                {withdrawStep === 'sent' && receipt && (
+                  <>
+                    <View style={styles.sentHead}>
+                      <View style={[styles.sentBadge, { borderColor: colors.primary }]}>
+                        <Ionicons name="checkmark" size={24} color={colors.primary} />
+                      </View>
+                      {/* Title and detail share one column so the detail hangs
+                          off the title rather than off the badge. Nesting them
+                          keeps that true without repeating the badge width as
+                          a margin somewhere else. */}
+                      <View style={styles.sentText}>
+                        <Text style={[text.title, { color: colors.foreground }]}>Sent</Text>
+                        <Text
+                          style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 4 }]}
+                        >
+                          ${receipt.usdc.toFixed(2)} USDC is on its way. It usually lands within
+                          seconds.
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={[styles.receiptBox, { borderColor: colors.border }]}>
+                      {[
+                        { k: 'Amount', v: `$${receipt.usdc.toFixed(2)}` },
+                        {
+                          k: 'To',
+                          v: `${receipt.to.slice(0, 10)}…${receipt.to.slice(-8)}`,
+                        },
+                        { k: 'Network', v: 'Base' },
+                        { k: 'Fee', v: 'None — we covered it' },
+                      ].map((row, i) => (
+                        <View
+                          key={row.k}
+                          style={[
+                            styles.receiptRow,
+                            i > 0 && { borderTopWidth: 1, borderTopColor: colors.border },
+                          ]}
+                        >
+                          <Text style={[text.bodySmall, { color: colors.mutedForeground, flex: 1 }]}>
+                            {row.k}
+                          </Text>
+                          <Text style={[text.data, { color: colors.foreground }]}>{row.v}</Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    {/* The transaction hash is the only independent proof this
+                        happened, so it is offered rather than merely mentioned. */}
+                    <Pressable
+                      onPress={() => openTx(receipt.txHash)}
+                      style={({ pressed }) => [
+                        styles.explorerBtn,
+                        { borderColor: colors.borderStrong, opacity: pressed ? 0.8 : 1 },
+                      ]}
+                    >
+                      <Ionicons name="open-outline" size={15} color={colors.foreground} />
+                      <Text style={[text.action, { color: colors.foreground }]}>
+                        View on BaseScan
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      onPress={dismissWithdraw}
+                      style={({ pressed }) => [
+                        styles.primaryBtn,
+                        {
+                          backgroundColor: colors.foreground,
+                          opacity: pressed ? 0.88 : 1,
+                          paddingVertical: 16,
+                          marginTop: 10,
+                        },
+                      ]}
+                    >
+                      <Text style={[text.action, { color: colors.background }]}>Done</Text>
+                    </Pressable>
+                  </>
+                )}
+
+              </ScrollView>
+
+              {/* Sits outside the scroll view because iOS hosts it over the
+                  keyboard rather than in the layout, and only on iOS because
+                  Android has no such view and would render it inline. */}
+              {Platform.OS === 'ios' && (
+                <InputAccessoryView nativeID={AMOUNT_ACCESSORY_ID}>
+                  <View
+                    style={[
+                      styles.accessoryBar,
+                      { backgroundColor: colors.surface, borderTopColor: colors.border },
+                    ]}
+                  >
+                    <Pressable onPress={() => Keyboard.dismiss()} hitSlop={10}>
+                      <Text style={[text.action, { color: colors.accent }]}>Done</Text>
+                    </Pressable>
+                  </View>
+                </InputAccessoryView>
+              )}
+            </Pressable>
+          </SheetKeyboardView>
         </Pressable>
+
+        {/*
+         * Nested inside the withdrawal sheet rather than beside it, so it
+         * unmounts with the sheet — and so a dismissed withdrawal can never
+         * leave a camera running behind it.
+         */}
+        <AddressScanner
+          visible={scanOpen}
+          onClose={() => setScanOpen(false)}
+          onScan={(address) => {
+            setToAddress(address);
+            setWithdrawError(null);
+          }}
+        />
       </Modal>
 
       {/* ── Receive ────────────────────────────────────────────────
@@ -923,6 +1136,14 @@ export default function YouScreen() {
         transparent
         animationType="slide"
         onRequestClose={() => setReceiveOpen(false)}
+        // Fires once the sheet is fully gone and iOS has the presentation
+        // context back — the only safe moment to open the share sheet.
+        onDismiss={() => {
+          if (__DEV__) console.log('[share] modal onDismiss fired');
+          if (!shareOnDismiss) return;
+          setShareOnDismiss(false);
+          void doShareAddress();
+        }}
       >
         <Pressable
           style={[styles.backdrop, { backgroundColor: colors.overlay }]}
@@ -984,6 +1205,7 @@ export default function YouScreen() {
                 disabled={!walletAddress}
                 style={({ pressed }) => [
                   styles.primaryBtn,
+                  styles.btnFill,
                   {
                     backgroundColor: copied ? colors.primary : colors.foreground,
                     opacity: pressed ? 0.88 : 1,
@@ -1011,6 +1233,7 @@ export default function YouScreen() {
                 disabled={!walletAddress}
                 style={({ pressed }) => [
                   styles.outlineBtn,
+                  styles.btnFill,
                   { borderColor: colors.borderStrong, opacity: pressed ? 0.7 : 1, paddingVertical: 14 },
                 ]}
               >
@@ -1065,15 +1288,26 @@ const styles = StyleSheet.create({
   walletTop: { marginTop: 30 },
   walletHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   walletActions: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  /**
+   * Fills its row only where it is asked to.
+   *
+   * flex: 1 lived on the button itself, which is right in the two action rows
+   * and wrong in the withdrawal sheet: that is a column, so flexBasis: 0 left
+   * the button contributing no intrinsic height and it collapsed to its own
+   * padding with the label squashed inside — a coloured box with no words on
+   * it. A column child already stretches to full width without any of this.
+   */
+  btnFill: { flex: 1 },
   primaryBtn: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 2,
     paddingVertical: 13,
+    // Clips SendingIndicator's sweep to the button. Without it the highlight
+    // travels out over the sheet on either side.
+    overflow: 'hidden',
   },
   outlineBtn: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
@@ -1121,6 +1355,9 @@ const styles = StyleSheet.create({
   },
 
   backdrop: { flex: 1, justifyContent: 'flex-end' },
+  // Fills the backdrop rather than hugging the sheet, so this is the box the
+  // keyboard shrinks and the sheet keeps sitting on top of what is left.
+  lift: { flex: 1, justifyContent: 'flex-end' },
   sheet: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
@@ -1128,10 +1365,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: 12,
     gap: 14,
+    // Never taller than the space the keyboard leaves behind. Without this the
+    // sheet keeps its full height and is pushed off the top of the screen.
+    maxHeight: '92%',
   },
+  // flexShrink so the scroll view gives up height to the cap above rather than
+  // insisting on its content size and defeating it.
+  sheetScroll: { flexShrink: 1 },
+  accessoryBar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    borderTopWidth: 2,
+    paddingHorizontal: 20,
+    paddingVertical: 11,
+  },
+  // The gap the sheet used to apply to these children directly, now that they
+  // sit one level deeper.
+  sheetContent: { gap: 14 },
   grabber: { width: 38, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 8 },
   balanceBox: { borderWidth: 2, borderRadius: 2, padding: 14, gap: 3, marginTop: 4 },
   destRow: { flexDirection: 'row', gap: 9 },
+  /**
+   * Icon beside the name rather than stacked over it, which buys back a line
+   * of height in a sheet that has to clear the keyboard.
+   *
+   * The label takes flex: 1 so a name too long for a half-width card wraps
+   * under itself instead of pushing the icon out of the card.
+   */
+  destHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   dest: {
     flex: 1,
     borderWidth: 2,
@@ -1153,13 +1415,24 @@ const styles = StyleSheet.create({
   },
   amountPrefix: { fontFamily: font.monoMedium, fontSize: 19 },
   amountInput: { flex: 1, fontFamily: font.monoMedium, fontSize: 19, padding: 0 },
+  addressRow: { flexDirection: 'row', alignItems: 'stretch', gap: 8 },
   addressField: {
+    flex: 1,
     borderWidth: 2,
     borderRadius: 2,
     paddingHorizontal: 13,
     paddingVertical: 12,
     fontFamily: font.mono,
     fontSize: 13,
+  },
+  // Square, and matched to the field beside it rather than given a height of
+  // its own, so the two stay aligned whatever the font scale does.
+  scanButton: {
+    width: 46,
+    borderWidth: 2,
+    borderRadius: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   demoWarn: {
@@ -1209,6 +1482,13 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   backLink: { paddingVertical: 13, alignItems: 'center' },
+  // Badge beside the word rather than stacked over it. alignSelf is gone with
+  // it: in a row that would fight the row's own alignment.
+  // flex-start, not center: the text column is taller than the badge now,
+  // and centring it against two lines drops the badge below the title it
+  // belongs to.
+  sentHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  sentText: { flex: 1 },
   sentBadge: {
     width: 52,
     height: 52,
@@ -1216,7 +1496,6 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'flex-start',
   },
   receiptBox: { borderWidth: 2, borderRadius: 2, marginTop: 16 },
   receiptRow: {

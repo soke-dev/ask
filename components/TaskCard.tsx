@@ -2,14 +2,27 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useColors } from '@/hooks/useColors';
+import { useNow } from '@/hooks/useNow';
 import { text } from '@/constants/type';
 import { formatNaira, verifierCut } from '@/constants/money';
 import { stateForArea, type NearbyTask } from '@/contexts/AppContext';
 
-function countdown(seconds: number) {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
+/**
+ * Time left, from the deadline rather than from a counter.
+ *
+ * This used to format `expiresIn` as seconds — but that value arrives from
+ * the server in minutes, so a thirty-minute job rendered as "0:30" and ran
+ * out in half a minute.
+ */
+function remaining(expiresAt: number, now: number): string {
+  const ms = Math.max(0, expiresAt - now);
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+  }
+  if (minutes >= 1) return `${minutes}m`;
+  return `${Math.floor(ms / 1000)}s`;
 }
 
 /**
@@ -19,14 +32,24 @@ function countdown(seconds: number) {
  */
 export function TaskCard({ task, onPress }: { task: NearbyTask; onPress: () => void }) {
   const colors = useColors();
-  const state = stateForArea(task.area);
-  const urgent = task.expiresIn < 300;
+  // The server's state when there is one, derived from the area otherwise —
+  // a place name alone is ambiguous across Nigeria.
+  const state = task.state || stateForArea(task.area);
+  // Under ten minutes. Compared in milliseconds against the deadline, not in
+  // whatever unit a counter happened to hold — the old check read minutes as
+  // seconds and marked almost every job urgent.
+  // Ticks itself, so the countdown moves without waiting for the list to
+  // re-render for some other reason.
+  const now = useNow(task.expiresAt);
+  const urgent = task.expiresAt - now < 10 * 60_000;
 
   const categoryTint = {
+    housing: colors.catHousing,
     fuel: colors.catFuel,
     food: colors.catFood,
     traffic: colors.catTraffic,
     shopping: colors.catShopping,
+    other: colors.catOther,
     safety: colors.catSafety,
   }[task.category];
 
@@ -68,7 +91,7 @@ export function TaskCard({ task, onPress }: { task: NearbyTask; onPress: () => v
           </Text>
           <Text style={[text.data, { color: colors.faintForeground }]}>{task.distance}</Text>
           <Text style={[text.data, { color: urgent ? colors.danger : colors.faintForeground }]}>
-            · {countdown(task.expiresIn)}
+            · {remaining(task.expiresAt, now)}
           </Text>
           <Ionicons name="arrow-forward" size={13} color={colors.foreground} />
         </View>

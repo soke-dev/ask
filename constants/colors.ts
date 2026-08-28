@@ -1,5 +1,5 @@
 /**
- * Ask Nearby — "Signal" palette.
+ * Confam — "Signal" palette.
  *
  * Borrowed from transit boards and road signage rather than from product UI:
  * a near-black ground with a small set of full-chroma signal colours that each
@@ -60,6 +60,10 @@ const colors = {
     catTraffic: '#2E9BFF',
     catShopping: '#C77DFF',
     catSafety: '#FF3B30',
+    catHousing: '#FF7A45',
+    // Grey on purpose: 'other' means we could not tell, and a colour of its own
+    // would imply a subject it does not have.
+    catOther: '#6E7883',
 
     overlay: 'rgba(0, 0, 0, 0.72)',
     /** Page behind the phone frame on wide web viewports. */
@@ -108,6 +112,8 @@ const colors = {
     catTraffic: '#0B63C4',
     catShopping: '#7A2FBF',
     catSafety: '#C81E14',
+    catHousing: '#C2521C',
+    catOther: '#6E7883',
 
     overlay: 'rgba(11, 13, 16, 0.58)',
     /** Page behind the phone frame on wide web viewports. */

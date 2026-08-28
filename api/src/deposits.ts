@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { incomingUsdc, latestBlock, type IncomingTransfer } from './chain.js';
 import { one, query, transaction } from './db.js';
 import { ngnRate } from './rates.js';
+import { notify } from './push.js';
 
 /**
  * Finds USDC that arrived on Base and writes it into the ledger.
@@ -53,13 +54,28 @@ export async function syncDeposits(userId: string, address: string): Promise<Syn
     transfers.push(...(await incomingUsdc(address, from, to)));
   }
 
+  /**
+   * Money arriving from the escrow contract is not a top up.
+   *
+   * It is a job being paid out or a bounty coming back, and the ledger already
+   * recorded that as an `earning` or a `refund` when the release happened.
+   * Counting the arrival as well credited the same money twice — a ₦500 job
+   * showed as ₦500 earned *and* ₦450 topped up, and the balance was simply
+   * wrong.
+   *
+   * The chain is still the truth for the wallet's actual USDC; this is only
+   * about not writing a second ledger row for a settlement we already know.
+   */
+  const escrow = config.chain.escrowAddress.toLowerCase();
+  const external = transfers.filter((t) => t.from.toLowerCase() !== escrow);
+
   let inserted = 0;
 
-  if (transfers.length > 0) {
+  if (external.length > 0) {
     const rate = await ngnRate();
 
     await transaction(async (client) => {
-      for (const t of transfers) {
+      for (const t of external) {
         /**
          * Written in naira as well as USDC because `amount_kobo` is the column
          * every other flow sums. The rate used is stored alongside, so the
@@ -89,7 +105,26 @@ export async function syncDeposits(userId: string, address: string): Promise<Syn
             `Top up · ${t.usdc} USDC`,
           ],
         );
-        inserted += result.rowCount ?? 0;
+        const isNew = result.rowCount ?? 0;
+        inserted += isNew;
+
+        /**
+         * Only for a row that was actually new.
+         *
+         * The scan re-reads overlapping block ranges by design, and the
+         * ON CONFLICT above is what makes that safe. Notifying without this
+         * check would announce the same deposit on every scan for as long as
+         * it stayed inside the window.
+         */
+        if (isNew > 0) {
+          void notify({
+            userId,
+            kind: 'payment',
+            title: 'Top up received',
+            body: `${t.usdc} USDC landed in your wallet.`,
+            href: '/activity',
+          });
+        }
       }
     });
   }
@@ -98,7 +133,7 @@ export async function syncDeposits(userId: string, address: string): Promise<Syn
 
   return {
     scannedTo: ceiling,
-    found: transfers.length,
+    found: external.length,
     inserted,
     moreToScan: ceiling < head,
   };

@@ -1,12 +1,24 @@
 import React, { useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Image,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useColors } from '@/hooks/useColors';
 import { font, text } from '@/constants/type';
+import { mediaUrl } from '@/utils/api';
 import { formatNaira, verifierCut } from '@/constants/money';
 import { useApp, type Dispute } from '@/contexts/AppContext';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 
 /**
  * The verifier's side of a contested job. They answer the objection here;
@@ -38,7 +50,7 @@ export default function DisputesScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.scroll, { paddingTop: topPad }]}
@@ -145,10 +157,72 @@ export default function DisputesScreen() {
                   <Text style={[text.subheading, { color: colors.foreground, marginTop: 4 }]}>
                     {dispute.question}
                   </Text>
-                  {dispute.adminNote && (
-                    <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 6 }]}>
-                      Reviewer: {dispute.adminNote}
+
+                  {/*
+                    * The whole case, not just its title.
+                    *
+                    * This card showed the question and nothing else, so a
+                    * verifier waiting on a reviewer could not read back the
+                    * objection, their own reply, or the photograph the three of
+                    * them are disagreeing about. Waiting is easier when you can
+                    * see what is being weighed.
+                    */}
+                  {dispute.evidence.detail ? (
+                    dispute.evidence.kind === 'video' ? (
+                      <Text
+                        onPress={() => {
+                          const url = mediaUrl(dispute.evidence.detail);
+                          if (url) void Linking.openURL(url);
+                        }}
+                        style={[text.action, { color: colors.accent, marginTop: 10 }]}
+                      >
+                        Open the video you sent
+                      </Text>
+                    ) : (
+                      <Image
+                        source={{ uri: mediaUrl(dispute.evidence.detail) ?? undefined }}
+                        style={styles.evidenceShot}
+                        resizeMode="cover"
+                      />
+                    )
+                  ) : null}
+
+                  {dispute.answer && (
+                    <View style={[styles.side, { borderColor: colors.border }]}>
+                      <Text style={[text.data, { color: colors.faintForeground }]}>
+                        what you sent
+                      </Text>
+                      <Text style={[text.bodySmall, { color: colors.foreground, marginTop: 3 }]}>
+                        {dispute.answer}
+                      </Text>
+                    </View>
+                  )}
+
+                  <View style={[styles.side, { borderColor: colors.danger }]}>
+                    <Text style={[text.data, { color: colors.danger }]}>
+                      {dispute.askerName} said
                     </Text>
+                    <Text style={[text.bodySmall, { color: colors.foreground, marginTop: 3 }]}>
+                      {dispute.askerReason}
+                    </Text>
+                  </View>
+
+                  {dispute.verifierReply && (
+                    <View style={[styles.side, { borderColor: colors.primary }]}>
+                      <Text style={[text.data, { color: colors.primary }]}>you replied</Text>
+                      <Text style={[text.bodySmall, { color: colors.foreground, marginTop: 3 }]}>
+                        {dispute.verifierReply}
+                      </Text>
+                    </View>
+                  )}
+
+                  {dispute.adminNote && (
+                    <View style={[styles.side, { borderColor: colors.accent }]}>
+                      <Text style={[text.data, { color: colors.accent }]}>reviewer</Text>
+                      <Text style={[text.bodySmall, { color: colors.foreground, marginTop: 3 }]}>
+                        {dispute.adminNote}
+                      </Text>
+                    </View>
                   )}
                 </View>
               );
@@ -170,12 +244,13 @@ export default function DisputesScreen() {
             </Text>
           </View>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  evidenceShot: { width: '100%', height: 200, borderRadius: 2, marginTop: 10 },
   screen: { flex: 1 },
   scroll: { paddingHorizontal: 20, paddingBottom: 44 },
   backBtn: {

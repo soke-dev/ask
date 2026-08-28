@@ -1,7 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { AREAS, useApp } from '@/contexts/AppContext';
-import { useAuth, useEnsureWallet } from '@/utils/privy';
+import { useAuth, useEnsureWallet, useSignAuthorization } from '@/utils/privy';
 import { API_BASE, apiFetch, hasApi, mediaUrl, setTokenProvider } from '@/utils/api';
+import * as Notifications from 'expo-notifications';
+import { router } from 'expo-router';
+import { registerForPush } from '@/utils/push';
 
 /**
  * The link between "Privy says who you are" and "this app has an account".
@@ -45,7 +48,7 @@ type Me = {
 };
 
 export function AccountSync() {
-  const { ready, user, getToken } = useAuth();
+  const { ready, user, getToken, signOut: privySignOut } = useAuth();
   const ensureWallet = useEnsureWallet();
   const {
     signIn,
@@ -57,7 +60,16 @@ export function AccountSync() {
     refreshIdentity,
     applyPreferences,
     refreshWallet,
+    refreshBalance,
+    refreshJobs,
+    refreshMyJobs,
+    refreshMyQuestions,
+    refreshAnswered,
+    refreshNotifications,
+    registerSignOut,
+    registerSigner,
   } = useApp();
+  const signAuthorization = useSignAuthorization();
 
   const did = user?.did ?? null;
   const email = user?.email ?? null;
@@ -80,6 +92,37 @@ export function AccountSync() {
   }, []);
 
   /**
+   * Asks for push once there is an account to attach it to.
+   *
+   * Gated on having a Privy identity for two reasons: the token is stored against a
+   * user row, so there is nowhere to put it before one exists; and a
+   * permission prompt on the very first launch, before anybody has seen what
+   * the app does, is the one most reliably denied for good.
+   */
+  useEffect(() => {
+    if (!did) return;
+    void registerForPush();
+  }, [did]);
+
+  /**
+   * Opens what the notification was about.
+   *
+   * Without this a tap launches the app on whatever screen it was last on,
+   * which for "your answer is ready" is any screen except the one with the
+   * answer on it. `href` is set by the server alongside the same route the
+   * in-app feed uses, so both surfaces land in the same place.
+   */
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const href = response.notification.request.content.data?.href;
+      if (typeof href === 'string' && href.startsWith('/')) {
+        router.push(href as never);
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  /**
    * Registered once, always calling the current getToken.
    *
    * Re-registering on every change tore the provider down to null before
@@ -93,6 +136,28 @@ export function AccountSync() {
     return () => setTokenProvider(null);
   }, []);
 
+  /**
+   * Hands AppContext the means to end the Privy session.
+   *
+   * Read through a ref for the same reason as the token getter: the identity
+   * of Privy's callbacks changes constantly, and re-registering on every one
+   * would leave windows where nothing is registered at all.
+   */
+  const signOutRef = useRef(privySignOut);
+  signOutRef.current = privySignOut;
+  useEffect(() => {
+    registerSignOut(() => signOutRef.current());
+    return () => registerSignOut(null);
+  }, [registerSignOut]);
+
+  // Same arrangement for the signer, so AppContext can relay escrow steps
+  // without being a component.
+  const signRef = useRef(signAuthorization);
+  signRef.current = signAuthorization;
+  useEffect(() => {
+    registerSigner((typedData) => signRef.current(typedData));
+  }, [registerSigner]);
+
   // Callbacks held in a ref so effects need not depend on their identity.
   const actions = useRef({
     signIn,
@@ -105,6 +170,12 @@ export function AccountSync() {
     refreshIdentity,
     applyPreferences,
     refreshWallet,
+    refreshBalance,
+    refreshJobs,
+    refreshMyJobs,
+    refreshMyQuestions,
+    refreshAnswered,
+    refreshNotifications,
   });
   actions.current = {
     signIn,
@@ -117,6 +188,12 @@ export function AccountSync() {
     refreshIdentity,
     applyPreferences,
     refreshWallet,
+    refreshBalance,
+    refreshJobs,
+    refreshMyJobs,
+    refreshMyQuestions,
+    refreshAnswered,
+    refreshNotifications,
   };
 
   /** Applies a /auth/me body to app state. */
@@ -189,6 +266,15 @@ export function AccountSync() {
         apiFetch<Me>('/auth/me'),
         a.refreshIdentity(),
         a.refreshWallet(),
+        // Fetched here so every screen has it, not only the one that happens
+        // to poll. The Ask tab reads the balance to decide whether a question
+        // can be paid for, and was left waiting on a visit to You.
+        a.refreshBalance(),
+        a.refreshJobs(),
+        a.refreshMyJobs(),
+        a.refreshMyQuestions(),
+        a.refreshAnswered(),
+        a.refreshNotifications(),
       ]);
       if (!mounted.current) return;
 

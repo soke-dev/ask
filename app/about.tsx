@@ -26,7 +26,7 @@ const STEPS = [
   {
     n: '04',
     title: 'You decide',
-    body: 'Photo or video comes back. Confirm it and they are paid. Query it and a person reviews it first.',
+    body: 'Photo or video comes back. Confirm it and they are paid. Query it and support reviews it first.',
   },
 ];
 
@@ -42,7 +42,7 @@ const LEGAL: { title: string; body: string[] }[] = [
   {
     title: 'Terms of service',
     body: [
-      'Ask Nearby connects people who want something checked with people already nearby who will go and check it.',
+      'Confam connects people who want something checked with people already nearby who will go and check it.',
       'We are not the one going. Verifiers are independent. They choose which jobs to take, and they are responsible for how they behave while doing them.',
       `When you pay for a question the amount is held, not sent. It reaches the verifier only when you confirm their evidence, and we keep ${FEE_PERCENT}. If nobody delivers inside the window you set, you take the whole amount back.`,
       'Answers describe one moment at one place. Things change. We do not promise an answer is still true later, and you should not lean on one for a decision that matters without checking it again.',
@@ -105,7 +105,7 @@ export default function AboutScreen() {
 
         <Text style={[text.body, { color: colors.mutedForeground, marginTop: 10 }]}>
           Some things cannot be looked up. Whether a street floods, whether the queue is worth it,
-          whether the shop is really open. Ask Nearby pays somebody already standing there to look
+          whether the shop is really open. Confam pays somebody already standing there to look
           and show you.
         </Text>
 

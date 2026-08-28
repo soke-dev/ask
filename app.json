@@ -1,35 +1,39 @@
 {
   "expo": {
-    "name": "Ask Nearby",
-    "slug": "ask-nearby",
+    "name": "Confam",
+    "slug": "confam",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "ask-nearby",
+    "scheme": "confam",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/icon.png",
+      "image": "./assets/images/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0B0D10"
+      "backgroundColor": "#FF6B00"
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.asknearby.app",
+      "bundleIdentifier": "xyz.confam.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.asknearby.app",
+      "package": "xyz.confam.app",
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
-      ]
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#FF6B00"
+      }
     },
     "web": {
-      "favicon": "./assets/images/icon.png"
+      "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       [
@@ -54,7 +58,23 @@
           "locationAlwaysAndWhenInUsePermission": "Ask Nearby uses your location to confirm you reached the place you were sent to check."
         }
       ],
-      "expo-secure-store"
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Ask Nearby uses the camera so you can photograph or film what you were sent to check, set your profile picture, and scan a wallet QR code when you withdraw.",
+          "microphonePermission": "Ask Nearby records audio with your video so you can say the date and describe what you are seeing.",
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-secure-store",
+      "expo-video",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#FF6B00"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

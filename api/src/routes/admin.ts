@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { attemptLogin, issueToken, requireAdmin } from '../adminAuth.js';
 import { one, query, transaction } from '../db.js';
+import { storage } from '../storage.js';
 
 export const adminRouter: Router = Router();
 
@@ -108,7 +109,9 @@ adminRouter.get('/disputes', async (_req, res) => {
             q.id AS "questionId", q.body AS question, q.bounty_kobo AS "bountyKobo",
             pl.name AS "placeName",
             asker.username AS "askerName", verifier.username AS "verifierName",
-            e.kind::text AS "evidenceKind", e.distance_metres AS "distanceMetres"
+            e.kind::text AS "evidenceKind", e.distance_metres AS "distanceMetres",
+            e.storage_key AS "evidenceKey", e.captured_at AS "capturedAt",
+            a.body AS answer
        FROM disputes d
        JOIN questions q ON q.id = d.question_id
        LEFT JOIN places pl ON pl.id = q.place_id
@@ -116,15 +119,32 @@ adminRouter.get('/disputes', async (_req, res) => {
        LEFT JOIN tasks t ON t.id = d.task_id
        LEFT JOIN profiles verifier ON verifier.user_id = t.verifier_id
        LEFT JOIN LATERAL (
-         SELECT kind, distance_metres FROM evidence
+         SELECT kind, distance_metres, storage_key, captured_at FROM evidence
           WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
        ) e ON TRUE
+       /*
+        * What the verifier actually wrote and sent.
+        *
+        * The desk had the *kind* of evidence and the distance, but neither the
+        * file nor the words — so a reviewer was asked to judge a photo they
+        * could not see, on the strength of the asker's objection alone.
+        */
+       LEFT JOIN LATERAL (
+         SELECT body FROM answers WHERE task_id = t.id ORDER BY submitted_at DESC LIMIT 1
+       ) a ON TRUE
       ORDER BY
         CASE d.status WHEN 'awaiting_admin' THEN 0 WHEN 'awaiting_verifier' THEN 1 ELSE 2 END,
         d.created_at DESC
       LIMIT 100`,
   );
-  res.json({ disputes: rows });
+  res.json({
+    disputes: rows.map((r) => ({
+      ...r,
+      // A path the desk can load. Without it the evidence is a filename the
+      // reviewer has no way to open.
+      evidenceUrl: r.evidenceKey ? storage.urlFor(String(r.evidenceKey)) : null,
+    })),
+  });
 });
 
 /**

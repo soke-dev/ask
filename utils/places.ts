@@ -58,22 +58,21 @@ const BIAS = {
 };
 
 /** Places we can offer with no network at all. */
-export const KNOWN_PLACES: Place[] = [
-  { id: 'p1', name: 'NNPC Station, Airport Road', area: 'Ikeja' },
-  { id: 'p2', name: 'Mobil Station, Allen Avenue', area: 'Ikeja' },
-  { id: 'p3', name: 'Computer Village', area: 'Ikeja' },
-  { id: 'p4', name: 'Ikeja City Mall', area: 'Ikeja' },
-  { id: 'p5', name: 'Mama Cass, Victoria Island', area: 'Victoria Island' },
-  { id: 'p6', name: 'Chicken Republic, Adeola Odeku', area: 'Victoria Island' },
-  { id: 'p7', name: 'Slot Electronics, Adeniran Ogunsanya', area: 'Surulere' },
-  { id: 'p8', name: 'Oyingbo Market', area: 'Lagos Island' },
-  { id: 'p9', name: 'Balogun Market', area: 'Lagos Island' },
-  { id: 'p10', name: 'Third Mainland Bridge', area: 'Lagos' },
-  { id: 'p11', name: 'Lekki Toll Gate', area: 'Lekki' },
-  { id: 'p12', name: 'Shoprite, Lekki Phase 1', area: 'Lekki' },
-  { id: 'p13', name: 'Ring Road', area: 'Benin City' },
-  { id: 'p14', name: 'Wuse Market', area: 'Abuja' },
-];
+/**
+ * Deliberately empty.
+ *
+ * This held nine Lagos landmarks used both as the picker's opening list and
+ * as the fallback when live search is unavailable. Neither is honest: a new
+ * account in Kano saw filling stations in Ikeja as "saved places", and a
+ * Photon outage turned a search for "market" into Oyingbo Market on Lagos
+ * Island.
+ *
+ * The picker now opens on places the person actually asked about, and when
+ * search returns nothing they can use exactly what they typed — a freeform
+ * place, which is the truthful answer to "we do not know this one".
+ */
+export const KNOWN_PLACES: Place[] = [];
+
 
 /**
  * The town or city part of a place, for use where there is only room for one

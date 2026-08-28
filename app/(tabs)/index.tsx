@@ -1,7 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
+  InputAccessoryView,
   Keyboard,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -28,7 +31,10 @@ import {
   type CachedAnswer,
   type Place,
   type Visibility,
+  isJobNearArea,
 } from '@/contexts/AppContext';
+import { useRefreshOnFocus } from '@/hooks/useRefreshOnFocus';
+import { useDialog } from '@/contexts/DialogContext';
 import {
   DEADLINE_PRESETS,
   DEFAULT_DEADLINE,
@@ -53,6 +59,8 @@ import {
 } from '@/constants/money';
 import { localityOf } from '@/utils/places';
 import { tidyQuestion } from '@/utils/tidyQuestion';
+import { tidyOnServer } from '@/utils/questionsApi';
+import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 
 type ScreenState = 'idle' | 'working' | 'found_answer' | 'needs_verification';
 
@@ -82,8 +90,49 @@ function LiveDot({ color }: { color: string }) {
   return <Animated.View style={[styles.liveDot, { opacity, backgroundColor: color }]} />;
 }
 
+/**
+ * Ties this screen's numeric fields to a Done bar.
+ *
+ * iOS gives a numeric keypad no return key, so once it is up there is nothing
+ * on it that puts it away. Android is unaffected: its keypad carries its own
+ * dismiss.
+ */
+const NUMERIC_ACCESSORY_ID = 'ask-numeric-accessory';
+
+/**
+ * Trims a place down to something that fits on one line.
+ *
+ * OSM hands back the full chain — "Agege Motor Road, Tinubu, Lagos" — which
+ * wrapped the meta row onto a second line and pushed the next answer down. The
+ * two ends are the parts that carry meaning: the street or landmark says which
+ * place, the state says whether it is anywhere near you. The middle is
+ * administrative filler.
+ */
+function shortPlace(area: string, max = 26): string {
+  const full = area.trim();
+  if (full.length <= max) return full;
+
+  const parts = full.split(',').map((p) => p.trim()).filter(Boolean);
+
+  if (parts.length > 2) {
+    const ends = `${parts[0]}, ${parts[parts.length - 1]}`;
+    if (ends.length <= max) return ends;
+  }
+
+  const first = parts[0] ?? full;
+  // Cut on a word rather than mid-syllable; a bare slice reads as a typo.
+  if (first.length <= max) return first;
+  const cut = first.slice(0, max).replace(/\s+\S*$/, '');
+  return `${cut || first.slice(0, max)}…`;
+}
+
 export default function AskScreen() {
   const colors = useColors();
+  const { notify } = useDialog();
+  /** True while the balance is being re-read, between the tap and the send. */
+  const [checking, setChecking] = useState(false);
+  /** True while the model is looking at the question. Drives the wand. */
+  const [tidying, setTidying] = useState(false);
   const insets = useSafeAreaInsets();
   const {
     addQuery,
@@ -91,14 +140,39 @@ export default function AskScreen() {
     tipVerifier,
     nearbyTasks,
     homeArea,
+    locationFilter,
     questionsNearby,
     answeredNearby,
     activeQuestions,
     unreadCount,
     answersPublicByDefault,
     profile,
+    refreshJobs,
+    refreshMyQuestions,
+    refreshNotifications,
     ngnPerUsd,
+    usdcBalance,
+    refreshBalance,
+    recentQuestions,
   } = useApp();
+
+  /**
+   * Own questions, and the nearby counter above them.
+   *
+   * Both are other-side-of-the-world facts: a verifier taking your question
+   * changes it, and questions appearing near you change the count. Neither
+   * event reaches this device on its own.
+   */
+  useRefreshOnFocus(
+    useCallback(
+      // Notifications too: every row in that feed is somebody else acting on
+      // your question, so the bell is stale for exactly as long as nothing
+      // asks. "Somebody took your job" existed the moment they took it — it
+      // just went unread until an unrelated refresh happened to collect it.
+      () => Promise.all([refreshMyQuestions(), refreshJobs(), refreshNotifications()]),
+      [refreshMyQuestions, refreshJobs, refreshNotifications],
+    ),
+  );
 
   // The live rate when we have one, the fallback constant only until then, so
   // this screen and the wallet never quote two different numbers.
@@ -138,11 +212,12 @@ export default function AskScreen() {
   const [tipped, setTipped] = useState(0);
   const [tipCustom, setTipCustom] = useState(false);
   const [tipDraft, setTipDraft] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Captured at press time: once a fix is applied the input matches the
   // tidied text, so `canTidy` is already false and cannot report what just
   // happened.
-  const [checkResult, setCheckResult] = useState<'fixed' | 'clean' | null>(null);
+  const [checkResult, setCheckResult] = useState<'fixed' | 'clean' | 'limited' | null>(null);
 
   const inputRef = useRef<TextInput>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -166,7 +241,17 @@ export default function AskScreen() {
       scrollRef.current?.scrollTo({ y: Math.max(y - 24, 0), animated: true });
     });
   }
-  const openLive = nearbyTasks.filter((t) => t.status === 'available').length;
+  /**
+   * The same jobs the Near me tab lists, counted the same way.
+   *
+   * This counted every open job anywhere, so it read 2 while the tab it sends
+   * you to showed none of them — the tile described a different board than the
+   * one behind it. Both sides now run isJobNearArea.
+   */
+  const nearLabel = locationFilter?.label ?? homeArea.label;
+  const openLive = nearbyTasks.filter(
+    (t) => t.status === 'available' && isJobNearArea(t, nearLabel),
+  ).length;
 
   useEffect(
     () => () => {
@@ -235,8 +320,77 @@ export default function AskScreen() {
     setTipDraft('');
   }
 
+  /**
+   * What this bounty costs in USDC, and whether the wallet holds it.
+   *
+   * The chain is what decides: funding pulls USDC out of the asker's wallet,
+   * so a naira figure we like the look of is beside the point. Unknown balance
+   * blocks the send rather than allowing it — failing closed is the only safe
+   * direction when the amount available has not been read.
+   */
+  const bountyUsdc = ngnPerUsd ? bountyValue / ngnPerUsd : null;
+  const canAfford =
+    bountyUsdc === null || usdcBalance === null ? false : usdcBalance >= bountyUsdc;
+
+  const shortfallNaira =
+    bountyUsdc !== null && usdcBalance !== null && ngnPerUsd && usdcBalance < bountyUsdc
+      ? Math.ceil((bountyUsdc - usdcBalance) * ngnPerUsd)
+      : 0;
+
+  const readyToSend = bountyValid && deadlineValid && canAfford;
+
+  /**
+   * Asks before taking the money.
+   *
+   * Sending a question moves real USDC into escrow and asks somebody to walk
+   * somewhere. That deserves a deliberate second tap and a plain account of
+   * what happens to the money — including the part people most want to know,
+   * which is what happens if nobody turns up.
+   */
   function handleDispatch() {
-    if (!bountyValid || !deadlineValid) return;
+    if (!readyToSend) return;
+    setConfirmOpen(true);
+  }
+
+  /**
+   * Checks the money again before spending it.
+   *
+   * `canAfford` gates the Send button, but it reads a balance that was fetched
+   * at some earlier point — so a stale figure let the question through, and
+   * the refusal arrived on the tracking screen after the question had been
+   * created and navigated to. Being told "you have $0.01" two screens after
+   * committing is the wrong place to learn it.
+   *
+   * The read is cheap and this is the one moment it has to be right.
+   */
+  async function confirmDispatch() {
+    // Guards a double tap: the sheet stays open while the balance is read, so
+    // the button is still there to be pressed again.
+    if (checking) return;
+    setChecking(true);
+
+    const fresh = await refreshBalance();
+    const needed = ngnPerUsd ? bountyValue / ngnPerUsd : null;
+    setChecking(false);
+
+    if (needed !== null && fresh !== null && fresh < needed) {
+      const short = Math.ceil((needed - fresh) * (ngnPerUsd ?? 0));
+      /**
+       * The sheet stays open behind this.
+       *
+       * Closing it would drop them back to the form with the amount they had
+       * just agreed to, and nothing to act on — leaving it up means Not yet is
+       * still there, and so is the figure being questioned.
+       */
+      await notify({
+        title: 'Not enough to send this',
+        message: `This costs about $${needed.toFixed(2)} and you have $${fresh.toFixed(2)}. Top up around ₦${formatNaira(short)} and try again.`,
+      });
+      return;
+    }
+
+    setConfirmOpen(false);
+
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     dispatchQuery(queryId, bountyValue, visibility, deadlineValue, verifiedOnly);
     router.push(`/tracking/${queryId}`);
@@ -246,11 +400,62 @@ export default function AskScreen() {
   // to blur: on web the input blurs on mouse-down, so hiding there would pull
   // the row out from under the click that was selecting it.
   const typed = question.trim().toLowerCase();
-  const suggestions = composing
+
+  /**
+   * Your own questions first, other people's behind them.
+   *
+   * Somebody checking the same filling station every morning should find it
+   * at the top rather than retyping it. A new account has none, so the
+   * nearby list is all it sees — which is also the only honest thing to show
+   * when there is no history to draw on.
+   */
+  const mineMatching = composing
+    ? recentQuestions
+        .filter((q) => !typed || q.toLowerCase().includes(typed))
+        .map((q, i) => ({ id: `mine-${i}`, text: q, mine: true as const, place: null }))
+    : [];
+
+  const nearbyMatching = composing
     ? questionsNearby
         .filter((q) => !typed || q.text.toLowerCase().includes(typed))
-        .slice(0, FEED_LIMIT)
+        // Never twice: a question of theirs that is also on the board belongs
+        // in the first group, not both.
+        .filter((q) => !recentQuestions.some((r) => r.toLowerCase() === q.text.toLowerCase()))
+        .map((q) => ({ id: q.id, text: q.text, mine: false as const, place: q }))
     : [];
+
+  /**
+   * Examples, shown only when there is nothing real to offer.
+   *
+   * Clearly labelled as examples and carrying no place, because they are not
+   * questions anybody asked — they exist to show what a good one looks like.
+   * The first thing a new account sees should teach the shape of the thing,
+   * not an empty box.
+   *
+   * Anything real outranks them: your own history first, other people's open
+   * questions next, and these only when both are empty.
+   */
+  const examples = [
+    'Is there fuel at this station right now?',
+    'How long is the queue?',
+    'Is this shop open today?',
+    'Is the road flooded?',
+    'What are they charging per litre?',
+  ];
+
+  const exampleMatching =
+    composing && mineMatching.length === 0 && nearbyMatching.length === 0
+      ? examples
+          .filter((q) => !typed || q.toLowerCase().includes(typed))
+          .map((q, i) => ({ id: `eg-${i}`, text: q, mine: false as const, place: null }))
+      : [];
+
+  const suggestions = [...mineMatching, ...nearbyMatching, ...exampleMatching].slice(
+    0,
+    FEED_LIMIT,
+  );
+
+  const showingExamples = exampleMatching.length > 0;
 
   function handleAsk() {
     const q = question.trim();
@@ -281,19 +486,63 @@ export default function AskScreen() {
   }
 
   const tidied = tidyQuestion(question);
+  /** Mirrors `question` for the async tidy, which cannot read stale state. */
+  const questionRef = useRef(question);
+  questionRef.current = question;
   const canTidy = tidied !== '' && tidied !== question;
 
   // The button always answers when there is text to check. Silently doing
   // nothing on already-clean input is indistinguishable from being broken,
   // so a clean pass confirms itself instead.
-  function handleTidy() {
-    if (!question.trim()) return;
+  /**
+   * The local pass first, then the model.
+   *
+   * tidyQuestion corrects by edit distance against a word list, which is
+   * instant and free and cannot help with "flaad" — nothing in a fixed list
+   * is close enough to "flood", and no list will ever hold every place name a
+   * question might mention. So the local result is applied immediately, and
+   * the model is asked to improve on it in the background.
+   *
+   * Applying the local fix up front is what keeps the button honest when the
+   * network is slow or absent: something happens on every tap, and the model
+   * only ever adds to it.
+   */
+  async function handleTidy() {
+    const original = question.trim();
+    if (!original) return;
     if (Platform.OS !== 'web') Haptics.selectionAsync();
-    if (canTidy) setQuestion(tidied);
 
-    setCheckResult(canTidy ? 'fixed' : 'clean');
+    const local = canTidy ? tidied : original;
+    if (canTidy) setQuestion(local);
+
+    setTidying(true);
+    const better = await tidyOnServer(local);
+    setTidying(false);
+
+    /**
+     * Only overwrite if they have not carried on typing.
+     *
+     * The request takes a second or two, and pulling the field out from under
+     * somebody mid-sentence to replace it with a correction of what they used
+     * to have written is worse than leaving the typo alone.
+     */
+    const stillTheirs = questionRef.current.trim() === local;
+    const fixed = better.ok && better.data.changed && stillTheirs;
+    if (fixed) setQuestion(better.data.text);
+
+    /**
+     * Says when the day's checks are used up.
+     *
+     * The local pass has already run, so the button did something either way —
+     * but a person who taps twice more and sees nothing change would fairly
+     * conclude it was broken. Two a day is a small enough allowance that it
+     * has to announce itself.
+     */
+    const outOfChecks = better.ok && better.data.limited === true;
+
+    setCheckResult(outOfChecks ? 'limited' : fixed || canTidy ? 'fixed' : 'clean');
     if (checkTimer.current) clearTimeout(checkTimer.current);
-    checkTimer.current = setTimeout(() => setCheckResult(null), 1500);
+    checkTimer.current = setTimeout(() => setCheckResult(null), outOfChecks ? 3200 : 1500);
   }
 
   function reset() {
@@ -309,7 +558,7 @@ export default function AskScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
-      <ScrollView
+      <KeyboardAwareScrollViewCompat
         ref={scrollRef}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -357,22 +606,39 @@ export default function AskScreen() {
 
         {/* ── Status panel ─────────────────────────────────────────── */}
         <View style={[styles.board, { borderColor: colors.border }]}>
+          {/* Was a hardcoded "23 verifiers online". We have no presence
+              tracking, so that number was not merely wrong — it was
+              unknowable. This counts answers that actually came back. */}
           <View style={styles.boardCell}>
             <LiveDot color={colors.primary} />
-            <Text style={[styles.reading, { color: colors.foreground }]}>23</Text>
+            <Text style={[styles.reading, { color: colors.foreground }]}>
+              {answeredNearby.length}
+            </Text>
             <Text style={[styles.cellLabel, { color: colors.faintForeground }]}>
-              Verifiers{'\n'}online
+              Answered{'\n'}nearby
             </Text>
           </View>
 
           <View style={[styles.boardDivider, { backgroundColor: colors.border }]} />
 
-          <View style={styles.boardCell}>
+          {/* A count of things somebody could go and do is a way in, not a
+              readout. Lands on Earn with the Near me filter already applied,
+              so the list matches the number that was tapped. */}
+          <Pressable
+            onPress={() => router.push('/(tabs)/earn?filter=near')}
+            accessibilityRole="button"
+            accessibilityLabel={`${openLive} jobs around you. Opens the jobs near you.`}
+            style={({ pressed }) => [styles.boardCell, { opacity: pressed ? 0.6 : 1 }]}
+          >
             <Text style={[styles.reading, { color: colors.accent }]}>{openLive}</Text>
-            <Text style={[styles.cellLabel, { color: colors.faintForeground }]}>
+            <Text style={[styles.cellLabel, { color: colors.faintForeground, flex: 1 }]}>
               Jobs{'\n'}around you
             </Text>
-          </View>
+            {/* This cell goes somewhere and the one beside it does not, and
+                nothing said so — two identical-looking readouts, one of them
+                secretly a link. */}
+            <Ionicons name="chevron-forward" size={14} color={colors.accent} />
+          </Pressable>
         </View>
 
         {state === 'idle' && (
@@ -411,17 +677,36 @@ export default function AskScreen() {
                     act on, so an empty composer stays uncluttered. */}
                 {question.trim().length > 0 && (
                   <Pressable
-                    onPress={handleTidy}
+                    onPress={() => void handleTidy()}
+                    disabled={tidying}
                     hitSlop={10}
                     accessibilityRole="button"
                     accessibilityLabel="Fix typos in your question"
                     style={({ pressed }) => [styles.wandBtn, { opacity: pressed ? 0.5 : 1 }]}
                   >
-                    <Ionicons
-                      name={checkResult ? 'checkmark' : 'color-wand-outline'}
-                      size={18}
-                      color={checkResult ? colors.primary : colors.mutedForeground}
-                    />
+                    {/* The check now goes to a model and takes a moment, so
+                        the button says so rather than looking unresponsive. */}
+                    {tidying ? (
+                      <ActivityIndicator size="small" color={colors.mutedForeground} />
+                    ) : (
+                      <Ionicons
+                        name={
+                          checkResult === 'limited'
+                            ? 'time-outline'
+                            : checkResult
+                              ? 'checkmark'
+                              : 'color-wand-outline'
+                        }
+                        size={18}
+                        color={
+                          checkResult === 'limited'
+                            ? colors.pending
+                            : checkResult
+                              ? colors.primary
+                              : colors.mutedForeground
+                        }
+                      />
+                    )}
                   </Pressable>
                 )}
               </View>
@@ -505,7 +790,13 @@ export default function AskScreen() {
               <View style={styles.suggestBox}>
                 <View style={styles.suggestHead}>
                   <Text style={[text.label, { color: colors.faintForeground }]}>
-                    {question.trim() ? 'Matching nearby' : 'Recently asked nearby'}
+                    {showingExamples
+                      ? 'For example'
+                      : mineMatching.length > 0
+                        ? 'You asked before'
+                        : question.trim()
+                          ? 'Matching nearby'
+                          : 'Asked nearby'}
                   </Text>
                   <Pressable onPress={() => setComposing(false)} hitSlop={10}>
                     <Ionicons name="close" size={15} color={colors.faintForeground} />
@@ -517,7 +808,10 @@ export default function AskScreen() {
                     key={q.id}
                     onPress={() => {
                       setQuestion(q.text);
-                      setPlace(placeForQuestion(q));
+                      // Their own past questions carry no place: the same
+                      // question next week is usually about the same spot,
+                      // but assuming that would pick a place they did not.
+                      if (q.place) setPlace(placeForQuestion(q.place));
                       setComposing(false);
                     }}
                     style={({ pressed }) => [
@@ -530,10 +824,15 @@ export default function AskScreen() {
                   >
                     <View style={{ flex: 1, gap: 3 }}>
                       <Text style={[text.body, { color: colors.foreground }]}>{q.text}</Text>
-                      <Text style={[text.data, { color: colors.faintForeground }]}>
-                        {q.placeName}
-                        {q.area !== homeArea.label ? ` · ${q.area}` : ''}
-                      </Text>
+                      {/* Only rows that carry a place have one to name. Their
+                          own past questions do not — the place is chosen
+                          fresh each time rather than assumed. */}
+                      {q.place && (
+                        <Text style={[text.data, { color: colors.faintForeground }]}>
+                          {q.place.placeName}
+                          {q.place.area !== homeArea.label ? ` · ${q.place.area}` : ''}
+                        </Text>
+                      )}
                     </View>
                     <Ionicons name="return-down-forward" size={14} color={colors.faintForeground} />
                   </Pressable>
@@ -612,8 +911,11 @@ export default function AskScreen() {
                         {item.confirmed ? 'Confirmed' : 'Unconfirmed'}
                       </Text>
                       <Text style={[text.data, { color: colors.faintForeground }]}>
-                        · {item.proof} · {item.ago}
-                        {item.area !== homeArea.label ? ` · ${item.area}` : ''}
+                        {/* The proof kind is not the reader's business here:
+                            confirmed is confirmed, and whether it came as a
+                            photo or a clip changes nothing about the answer. */}
+                        · {item.ago}
+                        {item.area !== homeArea.label ? ` · ${shortPlace(item.area)}` : ''}
                       </Text>
                     </View>
                   </View>
@@ -734,6 +1036,9 @@ export default function AskScreen() {
                         value={tipDraft}
                         onChangeText={(v) => setTipDraft(v.replace(/\D/g, '').slice(0, 6))}
                         keyboardType="numeric"
+                        inputAccessoryViewID={
+                          Platform.OS === 'ios' ? NUMERIC_ACCESSORY_ID : undefined
+                        }
                         placeholder="500"
                         placeholderTextColor={colors.faintForeground}
                       />
@@ -851,6 +1156,9 @@ export default function AskScreen() {
                       value={bounty}
                       onChangeText={(v) => setBounty(v.replace(/\D/g, '').slice(0, 6))}
                       keyboardType="numeric"
+                      inputAccessoryViewID={
+                        Platform.OS === 'ios' ? NUMERIC_ACCESSORY_ID : undefined
+                      }
                       placeholder="500"
                       placeholderTextColor={colors.faintForeground}
                       selectTextOnFocus
@@ -1005,6 +1313,9 @@ export default function AskScreen() {
                     value={deadline}
                     onChangeText={(v) => setDeadline(v.replace(/\D/g, '').slice(0, 5))}
                     keyboardType="numeric"
+                    inputAccessoryViewID={
+                      Platform.OS === 'ios' ? NUMERIC_ACCESSORY_ID : undefined
+                    }
                     placeholder="45"
                     placeholderTextColor={colors.faintForeground}
                   />
@@ -1098,13 +1409,29 @@ export default function AskScreen() {
               </View>
             </View>
 
+            {shortfallNaira > 0 && (
+              <Pressable
+                onPress={() => router.push('/(tabs)/you')}
+                style={({ pressed }) => [
+                  styles.shortfall,
+                  { borderColor: colors.pending, opacity: pressed ? 0.8 : 1 },
+                ]}
+              >
+                <Ionicons name="wallet-outline" size={15} color={colors.pending} />
+                <Text style={[text.bodySmall, { color: colors.pending, flex: 1 }]}>
+                  About ₦{formatNaira(shortfallNaira)} short. Top up to send this.
+                </Text>
+                <Ionicons name="chevron-forward" size={15} color={colors.pending} />
+              </Pressable>
+            )}
+
             <Pressable
               onPress={handleDispatch}
               disabled={!bountyValid || !deadlineValid}
               style={({ pressed }) => [
                 styles.dispatchBtn,
                 {
-                  backgroundColor: bountyValid && deadlineValid ? colors.accent : colors.sunken,
+                  backgroundColor: readyToSend ? colors.accent : colors.sunken,
                   opacity: pressed ? 0.88 : 1,
                 },
               ]}
@@ -1113,26 +1440,137 @@ export default function AskScreen() {
                 style={[
                   text.action,
                   {
-                    color:
-                      bountyValid && deadlineValid
-                        ? colors.accentForeground
-                        : colors.faintForeground,
+                    color: readyToSend ? colors.accentForeground : colors.faintForeground,
                   },
                 ]}
               >
-                Send someone · ₦{formatNaira(bountyValue)}
+                {!bountyValid || !deadlineValid
+                  ? `Send someone · ₦${formatNaira(bountyValue)}`
+                  : usdcBalance === null
+                    ? 'Checking your balance'
+                    : canAfford
+                      ? `Send someone · ₦${formatNaira(bountyValue)}`
+                      : 'Not enough in your wallet'}
               </Text>
-              <Ionicons
-                name="arrow-forward"
-                size={16}
-                color={
-                  bountyValid && deadlineValid ? colors.accentForeground : colors.faintForeground
-                }
-              />
+              {/* Spinner while the balance is still unknown, so the wait
+                  reads as work rather than a stuck button. */}
+              {usdcBalance === null && bountyValid && deadlineValid ? (
+                <ActivityIndicator size="small" color={colors.faintForeground} />
+              ) : (
+                <Ionicons
+                  name="arrow-forward"
+                  size={16}
+                  color={readyToSend ? colors.accentForeground : colors.faintForeground}
+                />
+              )}
             </Pressable>
           </View>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollViewCompat>
+
+      {/* ── Before the money moves ─────────────────────────────────
+          Sending is irreversible in the sense that matters: the bounty leaves
+          the wallet immediately. Said plainly, along with the two things
+          people actually want to know — when it is released, and what happens
+          if nobody goes. */}
+      <Modal
+        visible={confirmOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmOpen(false)}
+      >
+        <Pressable
+          style={[styles.confirmBackdrop, { backgroundColor: colors.overlay }]}
+          onPress={() => setConfirmOpen(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={[
+              styles.confirmCard,
+              { backgroundColor: colors.background, borderColor: colors.accent },
+            ]}
+          >
+            <Text style={[text.label, { color: colors.accent }]}>Before you send</Text>
+            <Text style={[text.title, { color: colors.foreground, marginTop: 6 }]}>
+              ₦{formatNaira(bountyValue)} leaves your wallet now
+            </Text>
+
+            <View style={[styles.confirmList, { borderColor: colors.border }]}>
+              {[
+                {
+                  icon: 'lock-closed-outline' as const,
+                  tone: colors.pending,
+                  text: 'It is held safely, not paid to anyone yet.',
+                },
+                {
+                  icon: 'checkmark-circle-outline' as const,
+                  tone: colors.primary,
+                  text: `Whoever goes is paid ₦${formatNaira(verifierCut(bountyValue))} only after you see their photo or video and accept it.`,
+                },
+                {
+                  icon: 'arrow-undo-outline' as const,
+                  tone: colors.money,
+                  text: `If nobody goes within ${formatDuration(deadlineValue)}, you take the full ₦${formatNaira(bountyValue)} back.`,
+                },
+                {
+                  icon: 'people-outline' as const,
+                  tone: colors.mutedForeground,
+                  text: 'If you disagree with what comes back, support reviews both sides before anything is decided.',
+                },
+              ].map((row) => (
+                <View key={row.text} style={styles.confirmRow}>
+                  <Ionicons name={row.icon} size={16} color={row.tone} />
+                  <Text style={[text.bodySmall, { color: colors.foreground, flex: 1 }]}>
+                    {row.text}
+                  </Text>
+                </View>
+              ))}
+            </View>
+
+            <Pressable
+              onPress={confirmDispatch}
+              disabled={checking}
+              style={({ pressed }) => [
+                styles.confirmGo,
+                {
+                  backgroundColor: colors.accent,
+                  opacity: pressed || checking ? 0.88 : 1,
+                },
+              ]}
+            >
+              {checking ? (
+                <View style={styles.confirmBusy}>
+                  <ActivityIndicator size="small" color={colors.accentForeground} />
+                  <Text style={[text.action, { color: colors.accentForeground }]}>
+                    Checking your balance
+                  </Text>
+                </View>
+              ) : (
+                <Text style={[text.action, { color: colors.accentForeground }]}>
+                  Send it · ₦{formatNaira(bountyValue)}
+                </Text>
+              )}
+            </Pressable>
+
+            {/* Kept out of the way mid-check: cancelling while a read is in
+                flight would leave the result arriving against a closed sheet. */}
+            <Pressable
+              onPress={() => setConfirmOpen(false)}
+              disabled={checking}
+              style={styles.confirmBack}
+            >
+              <Text
+                style={[
+                  text.action,
+                  { color: checking ? colors.faintForeground : colors.mutedForeground },
+                ]}
+              >
+                Not yet
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <PlacePicker
         visible={pickerOpen}
@@ -1142,6 +1580,25 @@ export default function AskScreen() {
           setPickerOpen(false);
         }}
       />
+
+      {/* iOS hosts this over the keypad rather than in the layout, and only on
+          iOS: Android has no such view and would render it inline, mid-screen.
+          Shared by every numeric field on this screen — only one keypad can be
+          up at a time, so one bar serves them all. */}
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={NUMERIC_ACCESSORY_ID}>
+          <View
+            style={[
+              styles.accessoryBar,
+              { backgroundColor: colors.surface, borderTopColor: colors.border },
+            ]}
+          >
+            <Pressable onPress={() => Keyboard.dismiss()} hitSlop={10}>
+              <Text style={[text.action, { color: colors.accent }]}>Done</Text>
+            </Pressable>
+          </View>
+        </InputAccessoryView>
+      )}
     </View>
   );
 }
@@ -1198,6 +1655,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.9,
     textTransform: 'uppercase',
   },
+  confirmBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 22 },
+  confirmCard: { width: '100%', maxWidth: 380, borderWidth: 2, borderRadius: 2, padding: 20 },
+  confirmList: { borderWidth: 2, borderRadius: 2, padding: 14, gap: 12, marginTop: 16 },
+  confirmRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  confirmGo: { borderRadius: 2, paddingVertical: 15, alignItems: 'center', marginTop: 18 },
+  confirmBack: { paddingVertical: 13, alignItems: 'center' },
   liveDot: { width: 7, height: 7, borderRadius: 2 },
 
   greeting: { marginTop: 26 },
@@ -1386,6 +1849,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 14,
     paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  shortfall: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    borderWidth: 2,
+    borderRadius: 2,
+    padding: 12,
+    marginBottom: 10,
+  },
+  confirmBusy: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  accessoryBar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    borderTopWidth: 2,
+    paddingHorizontal: 20,
     paddingVertical: 11,
   },
   dispatchBtn: {

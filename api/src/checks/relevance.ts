@@ -1,11 +1,11 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import sharp from 'sharp';
 import { config, hasVision } from '../config.js';
 import type { CheckResult } from './types.js';
 
-let client: Anthropic | null = null;
-function anthropic(): Anthropic {
-  if (!client) client = new Anthropic({ apiKey: config.anthropicKey });
+let client: OpenAI | null = null;
+function vision(): OpenAI {
+  if (!client) client = new OpenAI({ apiKey: config.visionKey });
   return client;
 }
 
@@ -47,12 +47,24 @@ export async function checkRelevance(
   }
 
   try {
-    // Downscaled before sending: the check is "is this the right kind of
-    // scene", which survives 800px fine, and full-resolution frames would
-    // multiply both latency and cost for no gain in accuracy.
+    /**
+     * 512px, measured rather than guessed.
+     *
+     * The image is most of what this request costs — about 640 of 855 input
+     * tokens at 800px — and the check is "is this the right kind of scene",
+     * which does not need detail. Run against real evidence at three widths:
+     *
+     *   800px  855 tokens   no, unclear
+     *   512px  575 tokens   no, unclear   <- same verdicts, a third cheaper
+     *   384px  435 tokens   no, no        <- a photo flipped to a false "no"
+     *
+     * 512 is where the saving stops being free. Below it the model starts
+     * calling things it cannot actually see, and a wrong "no" costs an honest
+     * verifier the payment for a trip they made.
+     */
     const small = await sharp(frame)
       .rotate()
-      .resize({ width: 800, withoutEnlargement: true })
+      .resize({ width: 512, withoutEnlargement: true })
       .jpeg({ quality: 70 })
       .toBuffer();
 
@@ -60,17 +72,41 @@ export async function checkRelevance(
       ? `Question: "${question}"\nPlace: ${placeName}`
       : `Question: "${question}"`;
 
-    const response = await anthropic().messages.create({
+    const response = await vision().chat.completions.create({
       model: config.visionModel,
-      max_tokens: 200,
-      system: SYSTEM,
+      /**
+       * Headroom, not a target.
+       *
+       * 200 was enough for most verdicts and not for all of them — a slightly
+       * longer reason hit the ceiling and the whole request failed with
+       * "max_tokens or model output limit was reached", turning a working
+       * check into a skip. Output is billed on what is used, not what is
+       * allowed, so the spare capacity is free; a verdict runs about 18 tokens.
+       */
+      max_completion_tokens: 600,
+      /**
+       * Without this the check returns an empty string.
+       *
+       * GPT-5 spends `max_completion_tokens` on internal reasoning *before*
+       * writing anything, so the default effort consumed the whole 200-token
+       * budget and left nothing for the answer — a successful, billed request
+       * with `content: ""`, which parseVerdict then discarded as unusable.
+       *
+       * 'low' is also the right setting on its merits: this is a three-way
+       * classification against a short rubric, not a problem that repays
+       * deliberation. Measured at 0 reasoning tokens and 18 completion tokens.
+       */
+      reasoning_effort: 'low',
       messages: [
+        { role: 'system', content: SYSTEM },
         {
           role: 'user',
           content: [
             {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/jpeg', data: small.toString('base64') },
+              type: 'image_url',
+              // A data URI rather than a hosted link: the evidence is private
+              // and must not be given a public URL to be looked at.
+              image_url: { url: `data:image/jpeg;base64,${small.toString('base64')}` },
             },
             { type: 'text', text: asked },
           ],
@@ -78,10 +114,7 @@ export async function checkRelevance(
       ],
     });
 
-    const text = response.content
-      .map((block) => (block.type === 'text' ? block.text : ''))
-      .join('')
-      .trim();
+    const text = (response.choices[0]?.message?.content ?? '').trim();
 
     const parsed = parseVerdict(text);
     if (!parsed) {
@@ -112,14 +145,26 @@ export async function checkRelevance(
           : 'Could not tell either way, which is not a problem.',
     };
   } catch (error) {
-    // A model outage must not stop an honest verifier being paid. The gap is
-    // recorded rather than papered over.
+    /**
+     * Failing open, but not silently.
+     *
+     * A model outage must not stop an honest verifier being paid, so this
+     * stays a `skipped` rather than a `fail`. What it used to do as well was
+     * flatten every cause into one sentence — an expired key, an empty credit
+     * balance and a genuine outage all read identically, and finding out which
+     * meant calling the API by hand. The operator gets the real reason; the
+     * verifier still gets the benefit of the doubt.
+     */
+    console.warn(
+      '[relevance] vision check failed —',
+      error instanceof Error ? error.message : String(error),
+    );
+
     return {
       name: 'relevance',
       tier: 2,
       verdict: 'skipped',
       detail: 'Not checked against the question — that check was unavailable.',
-      ...(error instanceof Error ? {} : {}),
     };
   }
 }

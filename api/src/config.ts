@@ -63,6 +63,21 @@ export const config = {
    */
   chain: {
     rpcUrl: process.env.BASE_RPC_URL ?? 'https://mainnet.base.org',
+    /**
+     * A second endpoint, for log scans only.
+     *
+     * The two jobs want opposite things from a provider and no free endpoint
+     * does both. Alchemy reports nonces correctly, which the public Base RPC
+     * does not — it served a pending nonce below its own latest and rejected
+     * every relayed transaction. But Alchemy's free tier caps eth_getLogs at a
+     * *ten block* range, and a deposit scan covers tens of thousands.
+     *
+     * So transactions go to the accurate endpoint and log scans to the
+     * permissive one. Defaults to rpcUrl, which is right for any paid provider
+     * where one endpoint can do both.
+     */
+    logsRpcUrl:
+      process.env.BASE_LOGS_RPC_URL ?? process.env.BASE_RPC_URL ?? 'https://mainnet.base.org',
     usdc: (process.env.USDC_ADDRESS ?? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913').toLowerCase(),
     chainId: num('BASE_CHAIN_ID', 8453),
     /** How long a balance read is reused. Base blocks are about 2s. */
@@ -96,6 +111,13 @@ export const config = {
 
     /** Refuse to relay below this, since a stuck relayer strands withdrawals. */
     minGasWalletEth: num('MIN_GAS_WALLET_ETH', 0.0002),
+
+    /**
+     * The AskEscrow proxy. The proxy address, never the implementation —
+     * the proxy holds the money and survives every upgrade, while the
+     * implementation holds only code and would be empty.
+     */
+    escrowAddress: (process.env.ESCROW_ADDRESS ?? '').toLowerCase(),
   },
 
   /**
@@ -107,9 +129,13 @@ export const config = {
     cacheMs: num('FX_CACHE_MS', 60 * 60 * 1000),
   },
 
-  anthropicKey: process.env.ANTHROPIC_API_KEY ?? '',
+  /**
+   * The vision provider's key. Named for the job, not the vendor — this has
+   * been Anthropic and is now OpenAI, and the rest of the app never cared.
+   */
+  visionKey: process.env.OPENAI_API_KEY ?? '',
   /** Vision model for the relevance check. */
-  visionModel: process.env.VISION_MODEL ?? 'claude-sonnet-5',
+  visionModel: process.env.VISION_MODEL ?? 'gpt-5',
 
   media: {
     maxBytes: num('MAX_UPLOAD_BYTES', 40 * 1024 * 1024),
@@ -163,6 +189,7 @@ export const config = {
 export const hasDatabase = () => config.databaseUrl.length > 0;
 export const hasPrivy = () =>
   config.privy.appId.length > 0 && config.privy.appSecret.length > 0;
-export const hasVision = () => config.anthropicKey.length > 0;
+export const hasVision = () => config.visionKey.length > 0;
 export const hasAdmin = () => config.admin.passwordHash.length > 0;
+export const hasEscrow = () => /^0x[0-9a-f]{40}$/.test(config.chain.escrowAddress);
 export const hasGasWallet = () => /^0x[0-9a-fA-F]{64}$/.test(config.chain.gasWalletKey);
