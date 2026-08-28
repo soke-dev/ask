@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1015704570443",
+    "project_id": "confam1",
+    "storage_bucket": "confam1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1015704570443:android:2d45c114bef6b8db3a9bce",
+        "android_client_info": {
+          "package_name": "xyz.confam.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDEU6nlRlSKmacp9sdn7A4EgslBMlT8xa0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
