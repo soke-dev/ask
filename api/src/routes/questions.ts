@@ -10,6 +10,10 @@ import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 
 export const questionsRouter: Router = Router();
 
+/** Mirrors MIN_TIP / MAX_TIP in constants/money.ts. */
+const MIN_TIP_NGN = 20;
+const MAX_TIP_NGN = 20_000;
+
 /**
  * The Ask and Earn loop, against the database.
  *
@@ -640,6 +644,113 @@ questionsRouter.post('/:id/accept', authenticate, async (req, res) => {
     }
     throw error;
   }
+});
+
+/**
+ * Pays a verifier again for work they already did.
+ *
+ * Reached from the screen that hands somebody an existing answer instead of
+ * sending anybody. That answer cost its original asker ₦500 and cost the
+ * verifier a walk; the person reading it now pays neither. A tip is the only
+ * thing in the app that pays for evidence after the fact, which is what makes
+ * old evidence worth taking well rather than just well enough.
+ *
+ * Two rows, not a transfer. `tip` is an outflow and `earning` an inflow in the
+ * same ledger the rest of the app reads, so this needs no new concept and
+ * cannot disagree with the balance shown everywhere else.
+ */
+questionsRouter.post('/:id/tip', authenticate, async (req, res) => {
+  const user = req.user!;
+  const naira = Number((req.body as { amountNgn?: unknown }).amountNgn);
+
+  if (!Number.isFinite(naira) || naira < MIN_TIP_NGN || naira > MAX_TIP_NGN) {
+    res.status(400).json({
+      error: 'bad_amount',
+      detail: `A tip is between ₦${MIN_TIP_NGN} and ₦${MAX_TIP_NGN}.`,
+    });
+    return;
+  }
+  const kobo = Math.round(naira * 100);
+
+  const job = await one<{ verifierId: string | null; verifier: string | null; status: string | null }>(
+    `SELECT t.verifier_id AS "verifierId", p.username AS verifier, t.status::text AS status
+       FROM questions q
+       LEFT JOIN tasks t    ON t.question_id = q.id
+       LEFT JOIN profiles p ON p.user_id = t.verifier_id
+      WHERE q.id = $1 AND q.visibility = 'public'`,
+    [req.params.id],
+  );
+
+  if (!job?.verifierId) {
+    res.status(404).json({ error: 'nobody_to_tip', detail: 'No verifier answered this.' });
+    return;
+  }
+  if (job.status !== 'submitted' && job.status !== 'confirmed') {
+    res.status(409).json({ error: 'not_answered', detail: 'Nothing has been delivered yet.' });
+    return;
+  }
+  /**
+   * Refused rather than quietly allowed.
+   *
+   * Two rows against one account net to nothing, so the money would be fine
+   * and the wallet history would show a tip that never left — which reads to
+   * everybody, later, as evidence that somebody was paid.
+   */
+  if (job.verifierId === user.id) {
+    res.status(400).json({ error: 'self_tip', detail: 'You cannot tip yourself.' });
+    return;
+  }
+
+  /**
+   * Checked against the same arithmetic the wallet screen uses.
+   *
+   * A tip is spending, and spending past the balance would put the ledger
+   * negative — a state nothing else in the app can produce and nothing
+   * downstream is written to expect.
+   */
+  const balance = await one<{ kobo: string }>(
+    `SELECT COALESCE(SUM(
+              CASE WHEN kind IN ('hold','tip','fee','withdrawal')
+                   THEN -amount_kobo ELSE amount_kobo END), 0)::bigint AS kobo
+       FROM wallet_entries WHERE user_id = $1 AND pending = FALSE`,
+    [user.id],
+  );
+
+  if (Number(balance?.kobo ?? 0) < kobo) {
+    res.status(400).json({
+      error: 'insufficient',
+      detail: `That is more than your balance of ₦${Math.floor(Number(balance?.kobo ?? 0) / 100)}.`,
+    });
+    return;
+  }
+
+  const me = await one<{ username: string | null }>(
+    `SELECT username FROM profiles WHERE user_id = $1`,
+    [user.id],
+  );
+
+  await transaction(async (client) => {
+    await client.query(
+      `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
+       VALUES ($1, 'tip', $2, $3, $4)`,
+      [user.id, kobo, req.params.id, `Tip to ${job.verifier ?? 'a verifier'}`],
+    );
+    await client.query(
+      `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
+       VALUES ($1, 'earning', $2, $3, $4)`,
+      [job.verifierId, kobo, req.params.id, `Tip from ${me?.username ?? 'someone'}`],
+    );
+  });
+
+  res.json({ ok: true, amountNgn: naira, verifier: job.verifier });
+
+  void notify({
+    userId: job.verifierId,
+    kind: 'payment',
+    title: `₦${Math.round(naira)} tip`,
+    body: `${me?.username ?? 'Somebody'} used your answer and tipped you for it.`,
+    href: '/(tabs)/you',
+  });
 });
 
 /** Submits the answer and the evidence behind it. */

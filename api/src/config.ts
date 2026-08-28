@@ -47,8 +47,15 @@ export const config = {
     enabled: (process.env.AGENTS_ENABLED ?? '').toLowerCase() === 'true',
     /** What an agent pays when an existing answer is reused instead of a trip. */
     cachedFeeKobo: num('AGENT_CACHED_FEE_KOBO', 5_000),
-    /** How old a verified answer can be before it is no longer worth reusing. */
-    maxAgeMinutes: num('AGENT_MAX_AGE_MINUTES', 120),
+    /**
+     * How old a verified answer can be before it is never reused.
+     *
+     * A day. Above the model rather than instead of it: within the window the
+     * judgment decides, because a fuel queue goes stale in an hour and roadworks
+     * do not, and past it nothing is offered as the current state of a place
+     * however good it looks.
+     */
+    maxAgeMinutes: num('AGENT_MAX_AGE_MINUTES', 1_440),
   },
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 

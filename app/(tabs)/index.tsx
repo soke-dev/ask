@@ -24,7 +24,6 @@ import { AgentTrace, TraceStep } from '@/components/AgentTrace';
 import { PlacePicker } from '@/components/PlacePicker';
 import { QuestionRow } from '@/components/QuestionRow';
 import {
-  findCachedAnswer,
   placeForQuestion,
   stateForArea,
   useApp,
@@ -59,7 +58,15 @@ import {
 } from '@/constants/money';
 import { localityOf } from '@/utils/places';
 import { tidyQuestion } from '@/utils/tidyQuestion';
-import { tidyOnServer } from '@/utils/questionsApi';
+import {
+  tidyOnServer,
+  checkIfKnown,
+  knownHere,
+  tipForAnswer,
+  hasApi,
+  type KnownAnswer,
+  type KnownHere,
+} from '@/utils/questionsApi';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { Wordmark } from '@/components/Wordmark';
 
@@ -129,7 +136,7 @@ function shortPlace(area: string, max = 26): string {
 
 export default function AskScreen() {
   const colors = useColors();
-  const { notify } = useDialog();
+  const { confirm, notify } = useDialog();
   /** True while the balance is being re-read, between the tap and the send. */
   const [checking, setChecking] = useState(false);
   /** True while the model is looking at the question. Drives the wand. */
@@ -202,6 +209,15 @@ export default function AskScreen() {
   const [queryId, setQueryId] = useState('');
   const [place, setPlace] = useState<Place | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  /**
+   * What the network already holds for the chosen place.
+   *
+   * Fetched as soon as a place is picked, so coverage is visible before the
+   * decision rather than after it. Nothing is charged and nothing is asked —
+   * this only reports what exists.
+   */
+  const [here, setHere] = useState<KnownHere[]>([]);
+  const [hereOpen, setHereOpen] = useState(false);
   const [composing, setComposing] = useState(false);
   const [bounty, setBounty] = useState(String(DEFAULT_BOUNTY));
   const [deadline, setDeadline] = useState(String(DEFAULT_DEADLINE));
@@ -210,7 +226,21 @@ export default function AskScreen() {
   );
   const [verifiedOnly, setVerifiedOnly] = useState(false);
   const [cached, setCached] = useState<CachedAnswer | null>(null);
+  /** What the server judgment found, read by the trace timer when it fires. */
+  const found = useRef<KnownAnswer | null>(null);
+  /**
+   * Why the agent decided what it did, in its own words.
+   *
+   * Worth showing rather than summarising. "The last check here was 2018
+   * minutes ago, which is too old to stand in" tells somebody about to spend
+   * ₦500 exactly what they are paying for, and it is obviously not a canned
+   * line — which is most of why it is convincing.
+   */
+  const reasonRef = useRef<string | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
   const [tipped, setTipped] = useState(0);
+  /** Blocks a second tap while the first is still with the server. */
+  const [tipping, setTipping] = useState(false);
   const [tipCustom, setTipCustom] = useState(false);
   const [tipDraft, setTipDraft] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -309,12 +339,68 @@ export default function AskScreen() {
   const areaState = place ? stateForArea(place.area) : null;
   const areaLine = place ? (areaState ? `${place.area}, ${areaState}` : place.area) : '—';
 
+  useEffect(() => {
+    setHere([]);
+    setHereOpen(false);
+    if (!place || !hasApi) return;
+
+    let stopped = false;
+    void (async () => {
+      const result = await knownHere(place.name, place.coords ?? null);
+      // Silent on failure: this is a convenience, and somebody asking a
+      // question must never be held up by one.
+      if (!stopped && result.ok) setHere(result.data.answers);
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, [place]);
+
   const tipDraftValue = Number.parseInt(tipDraft, 10) || 0;
   const tipDraftValid = tipDraftValue >= MIN_TIP && tipDraftValue <= MAX_TIP;
 
-  function sendTip(amount: number, verifierName: string) {
-    if (amount <= 0) return;
+  /**
+   * Confirms, then actually pays.
+   *
+   * Both halves were missing. It went straight through on one tap — real money
+   * with no chance to say no, on a screen where the amounts sit next to each
+   * other and a thumb can find the wrong one — and what it did was append a
+   * row to local wallet history, so the verifier was never paid and the entry
+   * vanished on reload.
+   */
+  async function sendTip(amount: number, verifierName: string) {
+    if (amount <= 0 || tipping) return;
+
+    const go = await confirm({
+      title: `Tip ${verifierName} ₦${formatNaira(amount)}?`,
+      message:
+        'They already went and checked this, and you are getting the answer without sending anybody. This comes out of your balance now.',
+      confirmLabel: `Send ₦${formatNaira(amount)}`,
+      cancelLabel: 'Not now',
+    });
+    if (!go) return;
+
     if (Platform.OS !== 'web') Haptics.selectionAsync();
+    setTipping(true);
+
+    /**
+     * Only shown as sent once the server says so.
+     *
+     * Showing it immediately and correcting later would tell somebody their
+     * money moved when it may not have, on the one screen where the whole
+     * point is that a payment is real.
+     */
+    const result = cached ? await tipForAnswer(cached.id, amount) : { ok: false as const, detail: 'Nothing to tip.' };
+    setTipping(false);
+
+    if (!result.ok) {
+      await notify({
+        title: 'That tip did not go through',
+        message: 'detail' in result && result.detail ? result.detail : 'Nothing was taken from your balance.',
+      });
+      return;
+    }
+
     tipVerifier(amount, verifierName);
     setTipped(amount);
     setTipCustom(false);
@@ -469,20 +555,73 @@ export default function AskScreen() {
     setTipped(0);
     setVisibility(answersPublicByDefault ? 'public' : 'private');
 
-    // An answer someone already paid for, but only if they let it be shared.
-    const existing = findCachedAnswer(place);
-    setCached(existing);
+    setCached(null);
 
     const id = addQuery(q, place);
     setQueryId(id);
     setSteps(INITIAL_STEPS.map((s) => ({ ...s, status: 'pending' })));
     setState('working');
 
+    /**
+     * Asked while the trace runs, not before it.
+     *
+     * The steps take about five seconds either way, and the judgment takes
+     * about two, so it finishes inside a wait that already existed. Doing it
+     * first would put a spinner in front of somebody who has just pressed the
+     * button, to tell them something they may not even need.
+     *
+     * `found` is a ref rather than state because the timer below reads it at
+     * the moment it fires, and a state write from an await would not have
+     * reached that closure.
+     */
+    found.current = null;
+    reasonRef.current = null;
+    setReason(null);
+    void (async () => {
+      if (!hasApi) return;
+      const result = await checkIfKnown(q, place.name, place.coords ?? null);
+      if (!result.ok) return;
+      reasonRef.current = result.data.because ?? null;
+      if (result.data.known && result.data.answer) {
+        found.current = result.data.answer;
+      }
+    })();
+
     timers.current = [
       setTimeout(() => advance(0), 200),
       setTimeout(() => advance(1), 1700),
       setTimeout(() => advance(2), 3200),
-      setTimeout(() => advance(3, existing ? 'found_answer' : 'needs_verification'), 4700),
+      setTimeout(() => {
+        /**
+         * Whatever the check found by now, which may be nothing.
+         *
+         * Not awaited: a slow judgment must not hold the trace open past the
+         * point it has run out of things to say. Missing it costs one
+         * unnecessary dispatch, which is exactly what happened before any of
+         * this existed.
+         */
+        const known = found.current;
+        setReason(reasonRef.current);
+        setCached(
+          known
+            ? {
+                id: known.id,
+                placeName: known.placeName,
+                area: known.area,
+                answer: known.answer,
+                detail: known.detail,
+                proof: known.proof,
+                confirmed: known.confirmed,
+                ageHours: known.ageHours,
+                ageLabel: known.ageLabel,
+                verifierName: known.verifierName,
+                verifierInitials: known.verifierInitials,
+                visibility: 'public',
+              }
+            : null,
+        );
+        advance(3, known ? 'found_answer' : 'needs_verification');
+      }, 4700),
     ];
   }
 
@@ -774,6 +913,54 @@ export default function AskScreen() {
               </View>
             </View>
 
+            {/*
+              * What is already known about this place.
+              *
+              * Sits under the composer because it is context for a decision
+              * not yet made, not a result. Coverage used to be invisible until
+              * after you had asked, so every question was partly a guess about
+              * whether anybody had ever been there.
+              */}
+            {state === 'idle' && here.length > 0 && (
+              <View style={[styles.hereCard, { borderColor: colors.border }]}>
+                <Pressable
+                  onPress={() => setHereOpen((v) => !v)}
+                  style={styles.hereHead}
+                  accessibilityRole="button"
+                  accessibilityLabel="See what is already known about this place"
+                >
+                  <Ionicons name="checkmark-circle" size={14} color={colors.primary} />
+                  <Text style={[text.bodySmall, { color: colors.foreground, flex: 1 }]}>
+                    {here.length === 1
+                      ? `Somebody checked here ${here[0]!.ageLabel}`
+                      : `${here.length} checks here · last ${here[0]!.ageLabel}`}
+                  </Text>
+                  <Ionicons
+                    name={hereOpen ? 'chevron-up' : 'chevron-down'}
+                    size={14}
+                    color={colors.faintForeground}
+                  />
+                </Pressable>
+
+                {hereOpen &&
+                  here.map((a) => (
+                    <View key={a.id} style={[styles.hereRow, { borderTopColor: colors.border }]}>
+                      <Text style={[text.data, { color: colors.faintForeground }]}>
+                        {a.ageLabel}
+                        {a.verifier ? ` · ${a.verifier}` : ''}
+                        {a.confirmed ? ' · confirmed' : ''}
+                      </Text>
+                      <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 2 }]}>
+                        {a.question}
+                      </Text>
+                      <Text style={[text.body, { color: colors.foreground, marginTop: 2 }]}>
+                        {a.answer}
+                      </Text>
+                    </View>
+                  ))}
+              </View>
+            )}
+
             {/* Never leave Ask greyed out without saying what is missing. */}
             {question.trim().length > 0 && !place && (
               <Pressable onPress={() => setPickerOpen(true)} style={styles.askHint}>
@@ -956,7 +1143,7 @@ export default function AskScreen() {
               </Text>
               <View style={[styles.ageTag, { borderColor: ageTone(cached.ageHours) }]}>
                 <Text style={[text.dataMedium, { color: ageTone(cached.ageHours) }]}>
-                  {cached.ageHours}h ago
+                  {cached.ageLabel ?? `${cached.ageHours}h ago`}
                 </Text>
               </View>
             </View>
@@ -1107,7 +1294,21 @@ export default function AskScreen() {
               { backgroundColor: colors.accentSoft, borderColor: colors.accent },
             ]}
           >
-            <Text style={[text.label, { color: colors.accent }]}>No reliable answer online</Text>
+            {/*
+              * The agent's finding, not a slogan.
+              *
+              * This read "No reliable answer online", which was a claim about
+              * a search nothing performed — and it was identical whether the
+              * place had never been visited or had been checked half an hour
+              * ago and judged stale. Those are different things and the person
+              * paying is entitled to know which one applies.
+              */}
+            <Text style={[text.label, { color: colors.accent }]}>
+              {reason ? 'What the check found' : 'Nothing recent to go on'}
+            </Text>
+            {reason && (
+              <Text style={[text.body, { color: colors.foreground, marginTop: 2 }]}>{reason}</Text>
+            )}
             <Text style={[text.title, styles.dispatchTitle, { color: colors.foreground }]}>
               Someone has to go and look.
             </Text>
@@ -1605,6 +1806,10 @@ export default function AskScreen() {
 }
 
 const styles = StyleSheet.create({
+  hereCard: { marginTop: 10, borderWidth: 2, borderRadius: 2 },
+  hereHead: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 11 },
+  hereRow: { borderTopWidth: 2, paddingHorizontal: 11, paddingVertical: 9 },
+
   screen: { flex: 1 },
   scroll: { paddingHorizontal: 20, paddingBottom: 36 },
 

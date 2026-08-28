@@ -277,32 +277,36 @@ export type CachedAnswer = {
   confirmed: boolean;
   /** How old the answer is. A stale one is worse than none. */
   ageHours: number;
+  /**
+   * The same age in words, when the server sent one.
+   *
+   * `ageHours` alone renders "0h ago" for something checked twenty minutes
+   * ago, which is the freshest and most persuasive case there is.
+   */
+  ageLabel?: string;
   verifierName: string;
   verifierInitials: string;
   visibility: Visibility;
 };
 
 /**
- * Loaded from the server, never seeded.
+ * There is no local cache of answers any more.
  *
- * A cached answer is a real answer somebody was paid for and chose to share,
- * so inventing one would be inventing work that nobody did.
+ * There used to be `findCachedAnswer`, searching a `CACHED_ANSWERS` array that
+ * was declared empty and never filled. It matched on place name alone, so even
+ * with data it would have offered an answer about a road to somebody asking
+ * about a market — and the screen it fed, tipping and all, was therefore never
+ * shown to anybody.
+ *
+ * Judging whether an existing answer addresses a new question is not something
+ * a client can do from a list, so it happens on the server: POST /agent/check,
+ * which reads the old question, its answer and its age against the new one.
+ * `CachedAnswer` above is still the shape that screen renders.
+ *
+ * Deliberately not left behind as a shim. A function that searches an empty
+ * array returns null for ever and reads like a working lookup, which is how it
+ * survived this long.
  */
-const CACHED_ANSWERS: CachedAnswer[] = [];
-
-
-/**
- * An existing answer for this place, if one exists and its payer made it
- * public. Private answers are never returned — not even as a teaser — since
- * the whole point of the setting is that it stays unseen.
- */
-export function findCachedAnswer(place: Place | null): CachedAnswer | null {
-  if (!place) return null;
-  const match = CACHED_ANSWERS.find(
-    (entry) => entry.placeName.toLowerCase() === place.name.toLowerCase(),
-  );
-  return match && match.visibility === 'public' ? match : null;
-}
 
 /**
  * The address money is sent to, once Privy has made one.

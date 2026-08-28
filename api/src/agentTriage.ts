@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { config, hasVision } from './config.js';
-import { one } from './db.js';
+import { one, query } from './db.js';
 
 /**
  * Deciding whether a human has to walk.
@@ -23,6 +23,58 @@ import { one } from './db.js';
  * a model reads the pair rather than a constant comparing them.
  */
 
+/**
+ * How long ago, said the way a person would say it.
+ *
+ * The reason string is shown to somebody deciding whether to spend ₦500, and
+ * "2018 minutes ago" makes them do arithmetic to find out it means yesterday.
+ * Minutes are right up to about an hour and useless after that.
+ */
+export function ago(minutes: number): string {
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+/**
+ * How far apart two picks can be and still count as the same place.
+ *
+ * Place names come from a geocoder and are not stable: the same junction comes
+ * back as "Etete", "Etete Road" and "Etete Junction" depending on what was
+ * typed, and matching on the name alone made those three different places. The
+ * same question, minutes apart, then answered differently — which is worse
+ * than not having the feature.
+ *
+ * 500m is a street and its junctions, not a district. Generous rather than
+ * strict on purpose: whatever this lets through, the model still reads the old
+ * question and can say it was about somewhere else. A radius that is slightly
+ * too wide loses nothing; one that is too narrow silently hides evidence.
+ */
+const SAME_PLACE_METRES = 500;
+
+/**
+ * Matches on name, or on being near enough to be the same place.
+ *
+ * Haversine inline rather than PostGIS, which is not installed and would be a
+ * large dependency for one comparison over a small table.
+ */
+const NEAR_PLACE = `(
+    p.name ILIKE $1
+    OR (
+      $2::float8 IS NOT NULL AND p.lat IS NOT NULL AND p.lng IS NOT NULL
+      AND 6371000 * acos(LEAST(1, GREATEST(-1,
+            sin(radians($2::float8)) * sin(radians(p.lat))
+          + cos(radians($2::float8)) * cos(radians(p.lat))
+          * cos(radians(p.lng) - radians($3::float8))
+      ))) <= ${SAME_PLACE_METRES}
+    )
+  )`;
+
+export type At = { lat: number; lng: number } | null;
+
 let client: OpenAI | null = null;
 function vision(): OpenAI {
   if (!client) client = new OpenAI({ apiKey: config.visionKey });
@@ -34,9 +86,13 @@ export type PriorAnswer = {
   question: string;
   answer: string;
   placeName: string;
+  area: string | null;
   minutesOld: number;
   evidenceKeys: string[];
   evidenceKind: 'photo' | 'video' | null;
+  verifier: string | null;
+  /** The asker who paid for it accepted it, rather than merely receiving it. */
+  confirmed: boolean;
 };
 
 export type Triage =
@@ -45,12 +101,18 @@ export type Triage =
 
 const SYSTEM = `You decide whether an existing verified answer still answers a new question.
 
-You are given a NEW question about a place, and an OLD question about the same
-place with the answer somebody brought back, and how many minutes ago that was.
+You are given a NEW question about a place, and an OLD question answered
+nearby, with what somebody brought back and how long ago.
 
-Answer "reuse" only if BOTH hold:
+The two places are within a few hundred metres of each other, but they may not
+be the same thing — "Etete Road" and "Etete Junction" usually are, while two
+shops on one street are not.
+
+Answer "reuse" only if ALL of these hold:
+- the two places are the same thing, or close enough that the answer applies to
+  both — a power cut covers a neighbourhood, a queue belongs to one shop
 - the old answer actually addresses what the new question asks, not merely the
-  same place
+  same area
 - it is still likely to be true right now, given how fast that kind of thing
   changes
 
@@ -72,24 +134,30 @@ Reply with JSON only:
  * the model's job, and a SQL LIKE that pre-filtered would throw away exactly
  * the cases worth reasoning about.
  */
-export async function priorAnswerFor(placeName: string): Promise<PriorAnswer | null> {
+export async function priorAnswerFor(placeName: string, at: At = null): Promise<PriorAnswer | null> {
   const row = await one<{
     questionId: string;
     question: string;
     answer: string;
     placeName: string;
+    area: string | null;
     minutesOld: number;
     keys: string[] | null;
     kind: 'photo' | 'video' | null;
+    verifier: string | null;
+    confirmed: boolean;
   }>(
     `SELECT q.id AS "questionId", q.body AS question, a.body AS answer,
-            p.name AS "placeName",
+            p.name AS "placeName", p.area,
             EXTRACT(EPOCH FROM (now() - t.submitted_at)) / 60 AS "minutesOld",
-            e.keys, e.kind
+            e.keys, e.kind,
+            v.username AS verifier,
+            (t.status = 'confirmed') AS confirmed
        FROM questions q
        JOIN tasks t   ON t.question_id = q.id
        JOIN answers a ON a.task_id = t.id
-       LEFT JOIN places p ON p.id = q.place_id
+       LEFT JOIN places p   ON p.id = q.place_id
+       LEFT JOIN profiles v ON v.user_id = t.verifier_id
        LEFT JOIN LATERAL (
          SELECT array_agg(storage_key ORDER BY created_at) AS keys,
                 (array_agg(kind::text ORDER BY created_at))[1] AS kind
@@ -98,12 +166,21 @@ export async function priorAnswerFor(placeName: string): Promise<PriorAnswer | n
             AND attempt IS NOT DISTINCT FROM
                 (SELECT max(attempt) FROM evidence WHERE task_id = t.id)
        ) e ON TRUE
-      WHERE p.name ILIKE $1
+      WHERE ${NEAR_PLACE}
         AND t.status IN ('submitted', 'confirmed')
         AND t.submitted_at IS NOT NULL
+        /*
+         * Public answers only.
+         *
+         * Somebody who paid for an answer and kept it private did so on the
+         * understanding that it stays unseen. Handing it to the next person
+         * asking about that place — or to an agent — would break that quietly
+         * and at scale, which is worse than breaking it loudly once.
+         */
+        AND q.visibility = 'public'
       ORDER BY t.submitted_at DESC
       LIMIT 1`,
-    [placeName],
+    [placeName, at?.lat ?? null, at?.lng ?? null],
   );
 
   if (!row) return null;
@@ -112,15 +189,80 @@ export async function priorAnswerFor(placeName: string): Promise<PriorAnswer | n
     question: row.question,
     answer: row.answer,
     placeName: row.placeName,
+    area: row.area,
     minutesOld: Math.round(Number(row.minutesOld)),
     evidenceKeys: Array.isArray(row.keys) ? row.keys : [],
     evidenceKind: row.kind,
+    verifier: row.verifier,
+    confirmed: Boolean(row.confirmed),
   };
 }
 
+/**
+ * Everything the network holds for a place, newest first.
+ *
+ * No model, because there is no question yet to judge anything against. This
+ * answers "has anybody been here lately", which is what somebody wants to know
+ * before deciding whether asking is worth ₦500 — and which the app could not
+ * tell them at all: coverage was invisible until after you committed.
+ */
+export async function knownFor(placeName: string, at: At = null, limit = 3): Promise<PriorAnswer[]> {
+  const rows = await query<{
+    questionId: string;
+    question: string;
+    answer: string;
+    placeName: string;
+    area: string | null;
+    minutesOld: number;
+    keys: string[] | null;
+    kind: 'photo' | 'video' | null;
+    verifier: string | null;
+    confirmed: boolean;
+  }>(
+    `SELECT q.id AS "questionId", q.body AS question, a.body AS answer,
+            p.name AS "placeName", p.area,
+            EXTRACT(EPOCH FROM (now() - t.submitted_at)) / 60 AS "minutesOld",
+            e.keys, e.kind, v.username AS verifier,
+            (t.status = 'confirmed') AS confirmed
+       FROM questions q
+       JOIN tasks t   ON t.question_id = q.id
+       JOIN answers a ON a.task_id = t.id
+       LEFT JOIN places p   ON p.id = q.place_id
+       LEFT JOIN profiles v ON v.user_id = t.verifier_id
+       LEFT JOIN LATERAL (
+         SELECT array_agg(storage_key ORDER BY created_at) AS keys,
+                (array_agg(kind::text ORDER BY created_at))[1] AS kind
+           FROM evidence
+          WHERE task_id = t.id
+            AND attempt IS NOT DISTINCT FROM
+                (SELECT max(attempt) FROM evidence WHERE task_id = t.id)
+       ) e ON TRUE
+      WHERE ${NEAR_PLACE}
+        AND t.status IN ('submitted', 'confirmed')
+        AND t.submitted_at IS NOT NULL
+        AND q.visibility = 'public'
+      ORDER BY t.submitted_at DESC
+      LIMIT $4`,
+    [placeName, at?.lat ?? null, at?.lng ?? null, limit],
+  );
+
+  return rows.map((row) => ({
+    questionId: row.questionId,
+    question: row.question,
+    answer: row.answer,
+    placeName: row.placeName,
+    area: row.area,
+    minutesOld: Math.round(Number(row.minutesOld)),
+    evidenceKeys: Array.isArray(row.keys) ? row.keys : [],
+    evidenceKind: row.kind,
+    verifier: row.verifier,
+    confirmed: Boolean(row.confirmed),
+  }));
+}
+
 /** Judges a prior answer against a new question. */
-export async function triage(question: string, placeName: string): Promise<Triage> {
-  const prior = await priorAnswerFor(placeName);
+export async function triage(question: string, placeName: string, at: At = null): Promise<Triage> {
+  const prior = await priorAnswerFor(placeName, at);
 
   if (!prior) {
     return { decision: 'dispatch', because: 'Nobody has checked this place recently.' };
@@ -138,7 +280,7 @@ export async function triage(question: string, placeName: string): Promise<Triag
   if (prior.minutesOld > config.agents.maxAgeMinutes) {
     return {
       decision: 'dispatch',
-      because: `The last check here was ${prior.minutesOld} minutes ago, which is too old to stand in.`,
+      because: `The last check here was ${ago(prior.minutesOld)}, which is too old to stand in.`,
     };
   }
 
@@ -165,11 +307,12 @@ export async function triage(question: string, placeName: string): Promise<Triag
         {
           role: 'user',
           content: [
-            `PLACE: ${prior.placeName}`,
+            `NEW PLACE: ${placeName}`,
+            `OLD PLACE: ${prior.placeName}`,
             `NEW QUESTION: ${question}`,
             `OLD QUESTION: ${prior.question}`,
             `ANSWER BROUGHT BACK: ${prior.answer}`,
-            `CHECKED: ${prior.minutesOld} minutes ago`,
+            `CHECKED: ${ago(prior.minutesOld)}`,
           ].join('\n'),
         },
       ],

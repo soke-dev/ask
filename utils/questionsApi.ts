@@ -205,6 +205,85 @@ export const cachedAnswerFor = (place: string) =>
     `/questions/cached?place=${encodeURIComponent(place)}`,
   );
 
+/**
+ * Whether the network already knows the answer, before anybody is sent.
+ *
+ * Replaces `cachedAnswerFor`, which matched on place name alone and so offered
+ * an answer about a road to somebody asking about a market. This asks the
+ * server to judge the old question against the new one and its age, and
+ * returns nothing rather than something unrelated.
+ *
+ * Silent on failure by design: a person asking a question must never be
+ * blocked because a convenience did not load. No answer means the ordinary
+ * path, which is what happened every time before this existed.
+ */
+export type KnownAnswer = {
+  id: string;
+  placeName: string;
+  area: string;
+  answer: string;
+  detail: string;
+  proof: 'photo' | 'video';
+  confirmed: boolean;
+  ageHours: number;
+  ageMinutes: number;
+  /** "20 minutes ago", "6 hours ago" — said rather than rounded. */
+  ageLabel: string;
+  verifierName: string;
+  verifierInitials: string;
+  visibility: 'public';
+  evidence: string[];
+};
+
+export const checkIfKnown = (
+  question: string,
+  place: string,
+  at?: { lat: number; lng: number } | null,
+) =>
+  apiFetch<{ known: boolean; because?: string; answer?: KnownAnswer }>('/agent/check', {
+    method: 'POST',
+    body: JSON.stringify({ question, place, lat: at?.lat ?? null, lng: at?.lng ?? null }),
+  });
+
+/**
+ * Pays a verifier again for an answer that was reused.
+ *
+ * The app had a `tipVerifier` that appended a row to local wallet history and
+ * nothing else — the verifier was never paid and the entry disappeared on
+ * reload. This is the call that actually moves it.
+ */
+export type KnownHere = {
+  id: string;
+  question: string;
+  answer: string;
+  ageLabel: string;
+  ageMinutes: number;
+  verifier: string | null;
+  confirmed: boolean;
+  proof: 'photo' | 'video' | null;
+  evidence: string[];
+};
+
+/**
+ * What the network already holds for a place, before anybody commits.
+ *
+ * Inventory rather than judgment: no question has been asked yet, so there is
+ * nothing to weigh relevance against. It exists so somebody can see whether a
+ * place has ever been visited before deciding it is worth ₦500 — which the app
+ * could not tell them at all.
+ */
+export const knownHere = (place: string, at?: { lat: number; lng: number } | null) =>
+  apiFetch<{ place: string; count: number; answers: KnownHere[] }>(
+    `/agent/known?place=${encodeURIComponent(place)}` +
+      (at ? `&lat=${at.lat}&lng=${at.lng}` : ''),
+  );
+
+export const tipForAnswer = (questionId: string, amountNgn: number) =>
+  apiFetch<{ ok: true; amountNgn: number; verifier: string | null }>(
+    `/questions/${questionId}/tip`,
+    { method: 'POST', body: JSON.stringify({ amountNgn }) },
+  );
+
 export { hasApi, toNaira };
 
 /** Records a query against an answer, so a reviewer can see it. */

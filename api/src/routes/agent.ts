@@ -4,7 +4,7 @@ import { authenticateAgent, mintKey } from '../agentAuth.js';
 import { config, hasAgents } from '../config.js';
 import { one, query, transaction } from '../db.js';
 import { storage } from '../storage.js';
-import { triage } from '../agentTriage.js';
+import { ago, knownFor, triage } from '../agentTriage.js';
 import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 import { notify, nearbyVerifiers } from '../push.js';
 
@@ -76,6 +76,122 @@ agentRouter.delete('/keys/:id', authenticate, async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * Does the network already know this?
+ *
+ * The same judgment /ask makes, exposed to the app rather than to a program,
+ * and answering the question a person is about to spend ₦500 on. Signed in
+ * with Privy, because the caller here is somebody holding a phone.
+ *
+ * This is what the app's own cached-answer path was always meant to be. It
+ * shipped as `findCachedAnswer`, searching a hardcoded empty array — so the
+ * screen behind it, tipping and all, has never once been shown to anybody.
+ *
+ * Nothing is charged and nothing is committed. It reports what exists; the
+ * decision to take it or send somebody anyway stays with the person.
+ */
+agentRouter.post('/check', authenticate, async (req, res) => {
+  const body = req.body as {
+    question?: unknown;
+    place?: unknown;
+    lat?: unknown;
+    lng?: unknown;
+  };
+  const question = String(body.question ?? '').trim();
+  const place = String(body.place ?? '').trim();
+  /**
+   * Where the place is, when the picker knew.
+   *
+   * Carried because names are not stable — the same junction comes back as
+   * "Etete" or "Etete Road" depending on what was typed, and matching on the
+   * name alone answered the same question two different ways minutes apart.
+   */
+  const at =
+    Number.isFinite(Number(body.lat)) && Number.isFinite(Number(body.lng))
+      ? { lat: Number(body.lat), lng: Number(body.lng) }
+      : null;
+
+  if (question.length < 3 || place.length < 2) {
+    res.json({ known: false });
+    return;
+  }
+
+  const verdict = await triage(question, place, at);
+  if (verdict.decision !== 'reuse') {
+    res.json({ known: false, because: verdict.because });
+    return;
+  }
+
+  const { prior } = verdict;
+  const name = prior.verifier ?? 'A verifier';
+
+  res.json({
+    known: true,
+    because: verdict.because,
+    answer: {
+      id: prior.questionId,
+      placeName: prior.placeName,
+      area: prior.area ?? '',
+      answer: prior.answer,
+      // What it was originally asked for, so somebody can see whether the
+      // match is as good as we think it is rather than taking our word.
+      detail: `Asked as “${prior.question}”`,
+      proof: prior.evidenceKind ?? 'photo',
+      confirmed: prior.confirmed,
+      ageHours: Math.max(0, Math.round(prior.minutesOld / 60)),
+      ageMinutes: prior.minutesOld,
+      // Said in words, because "0h ago" for something twenty minutes old is
+      // both wrong and the case that matters most.
+      ageLabel: ago(prior.minutesOld),
+      verifierName: name,
+      verifierInitials: name.slice(0, 2).toUpperCase(),
+      visibility: 'public',
+      evidence: prior.evidenceKeys.map((k) => storage.urlFor(k)),
+    },
+  });
+});
+
+/**
+ * What the network already holds for a place.
+ *
+ * Answered before anybody commits to anything, so somebody can see whether
+ * this place is covered at all before deciding it is worth ₦500. Coverage was
+ * invisible until after you had asked, which made every question a guess about
+ * whether the network had ever been there.
+ *
+ * No judgment and no model — there is no question yet to weigh anything
+ * against. This is inventory, not a decision.
+ */
+agentRouter.get('/known', authenticate, async (req, res) => {
+  const place = typeof req.query.place === 'string' ? req.query.place.trim() : '';
+  if (place.length < 2) {
+    res.json({ place: '', count: 0, answers: [] });
+    return;
+  }
+
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  const at = Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+
+  const answers = await knownFor(place, at);
+
+  res.json({
+    place,
+    count: answers.length,
+    answers: answers.map((a) => ({
+      id: a.questionId,
+      question: a.question,
+      answer: a.answer,
+      ageLabel: ago(a.minutesOld),
+      ageMinutes: a.minutesOld,
+      verifier: a.verifier,
+      confirmed: a.confirmed,
+      proof: a.evidenceKind,
+      evidence: a.evidenceKeys.map((k) => storage.urlFor(k)),
+    })),
+  });
+});
+
 // ── Asking ──────────────────────────────────────────────────────────────────
 
 /**
@@ -120,7 +236,12 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
     return;
   }
 
-  const verdict = await triage(question, place);
+  const at =
+    Number.isFinite(Number(body.lat)) && Number.isFinite(Number(body.lng))
+      ? { lat: Number(body.lat), lng: Number(body.lng) }
+      : null;
+
+  const verdict = await triage(question, place, at);
 
   /**
    * Somebody already answered this.
