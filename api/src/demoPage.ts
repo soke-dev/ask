@@ -96,6 +96,17 @@ export const DEMO_PAGE = `<!doctype html>
 
   <div id="out"></div>
 
+  <section class="card" style="margin-top:32px">
+    <div class="tag" style="color:var(--faint)">For your own agent</div>
+    <h2 style="font-size:19px;margin:8px 0 6px;font-weight:800">Get an API key</h2>
+    <p style="color:var(--muted);margin:0 0 14px">
+      Sign a message with your wallet. No email, no account, no gas — the signature
+      proves the address is yours and the key is bound to it.
+    </p>
+    <button id="key" type="button">Connect wallet &amp; get a key</button>
+    <div id="keyout"></div>
+  </section>
+
   <p class="foot" id="budget"></p>
   <p class="foot">
     Jobs posted here are real: money leaves a real balance and a real person may walk
@@ -181,6 +192,50 @@ function render(d) {
     '<p class="why">' + esc(d.because) + '</p>' +
     (why ? '<p class="meta">' + esc(why) + '</p>' : '') + '</div>';
 }
+
+$('#key').onclick = async () => {
+  const btn = $('#key'), box = $('#keyout');
+  if (!window.ethereum) {
+    box.innerHTML = '<p class="meta">No wallet found in this browser. Install MetaMask, or call POST /agent/keys/challenge yourself.</p>';
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Check your wallet…';
+  try {
+    const [address] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+
+    const c = await (await fetch('/agent/keys/challenge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    })).json();
+    if (c.error) throw new Error(c.error);
+
+    const signature = await window.ethereum.request({
+      method: 'personal_sign', params: [c.message, address],
+    });
+
+    const r = await (await fetch('/agent/keys/wallet', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address, signature }),
+    })).json();
+    if (!r.token) throw new Error(r.detail || r.error || 'could not mint');
+
+    box.innerHTML =
+      '<p class="meta" style="margin-top:14px;color:var(--ok)">Key for ' + esc(r.address) + '</p>' +
+      '<input readonly value="' + esc(r.token) + '" style="margin-top:8px" onclick="this.select()">' +
+      '<p class="meta">Copy it now — it is not stored and cannot be shown again.</p>' +
+      '<p class="meta" style="white-space:pre-wrap;margin-top:10px">curl -X POST ' + location.origin + '/agent/ask \
+' +
+      '  -H "Authorization: Bearer ' + esc(r.token.slice(0, 18)) + '…" \
+' +
+      '  -H "Content-Type: application/json" \
+' +
+      '  -d '{"question":"Is the gate open?","place":"Apapa"}'</p>';
+  } catch (e) {
+    box.innerHTML = '<p class="meta">' + esc(e.message || e) + '</p>';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Connect wallet & get a key';
+  }
+};
 
 function watch(id) {
   polling = setInterval(async () => {
