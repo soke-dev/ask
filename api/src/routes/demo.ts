@@ -159,11 +159,34 @@ demoRouter.post('/ask', async (req, res) => {
 
   const bountyKobo = config.agents.demoBountyKobo;
 
+  /**
+   * Coordinates borrowed from somewhere the network has already been.
+   *
+   * The page asks for a place by name and nothing else, so a demo place had no
+   * lat/lng — which quietly excluded it from proximity matching and left it
+   * matchable only by an exact string. Two judges typing "Ikeja" and "Ikeja,
+   * Lagos" would then have built two separate places that never shared what
+   * either of them learned.
+   *
+   * Only ever borrowed from an existing place of the same name, so it cannot
+   * invent a location: if nobody has been there, it stays null, which is
+   * honest and no worse than before.
+   */
+  const known = at
+    ? null
+    : await one<{ lat: number; lng: number }>(
+        `SELECT lat, lng FROM places
+          WHERE name ILIKE $1 AND lat IS NOT NULL
+          ORDER BY created_at DESC LIMIT 1`,
+        [place],
+      );
+  const coords = at ?? (known ? { lat: known.lat, lng: known.lng } : null);
+
   const created = await transaction(async (client) => {
     const placeRow = await client.query<{ id: string }>(
       `INSERT INTO places (provider, name, area, state, lat, lng)
        VALUES ('demo', $1, NULL, NULL, $2, $3) RETURNING id`,
-      [place, at?.lat ?? null, at?.lng ?? null],
+      [place, coords?.lat ?? null, coords?.lng ?? null],
     );
 
     const q = await client.query<{ id: string }>(
