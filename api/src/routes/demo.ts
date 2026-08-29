@@ -92,6 +92,30 @@ demoRouter.get('/budget', async (_req, res) => {
 });
 
 /**
+ * Places the network has actually been.
+ *
+ * Offered as suggestions on the page, so somebody typing at random is steered
+ * towards the places where an answer already exists — which is where the agent
+ * gets to show the half that costs nothing, rather than dispatching every time
+ * because a judge guessed a town nobody has visited.
+ */
+demoRouter.get('/places', async (_req, res) => {
+  const rows = await query<{ name: string; n: number }>(
+    `SELECT p.name, count(*)::int AS n
+       FROM questions q
+       JOIN tasks t   ON t.question_id = q.id
+       JOIN places p  ON p.id = q.place_id
+      WHERE q.visibility = 'public'
+        AND t.status IN ('submitted', 'confirmed')
+        AND p.name IS NOT NULL
+      GROUP BY p.name
+      ORDER BY max(t.submitted_at) DESC
+      LIMIT 6`,
+  );
+  res.json({ places: rows.map((r) => r.name) });
+});
+
+/**
  * Ask the agent, from the page.
  *
  * The judgment runs for everybody — it costs nothing and is the thing worth

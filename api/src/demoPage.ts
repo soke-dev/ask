@@ -77,6 +77,16 @@ export const DEMO_PAGE = `<!doctype html>
   .copy:hover { border-color:var(--accent); color:var(--accent); }
   .copy.done { border-color:var(--ok); color:var(--ok); }
 
+  /* Suggestions, sitting directly above the prompt they fill. */
+  .sug { border-top:1px solid var(--line); flex:none; }
+  .sug div {
+    padding:7px 14px; color:var(--dim); cursor:pointer;
+    display:flex; gap:9px; align-items:baseline;
+  }
+  .sug div:hover, .sug div.on { background:#101010; color:var(--fg); }
+  .sug div i { color:var(--faint); font-style:normal; flex:none; }
+  .sug div:hover i, .sug div.on i { color:var(--accent); }
+
   .hints { padding:0 14px 12px; display:flex; flex-wrap:wrap; gap:6px; flex:none; }
   .hints button {
     background:transparent; border:1px solid var(--line); color:var(--dim);
@@ -108,12 +118,13 @@ export const DEMO_PAGE = `<!doctype html>
   <div class="log" id="log"></div>
 
   <div class="hints">
-    <button data-c="is there light in etete?">light in Etete</button>
-    <button data-c="is the road flooded right now?">flooding</button>
     <button data-c="/key">/key</button>
     <button data-c="/jobs">/jobs</button>
+    <button data-c="/watch 1">/watch 1</button>
     <button data-c="/help">/help</button>
   </div>
+
+  <div class="sug" id="sug" hidden></div>
 
   <div class="row">
     <span class="ps1" id="ps1">&gt;</span>
@@ -184,7 +195,8 @@ function banner() {
   say('confam — questions no API can answer.', 'ok');
   say('An agent decides whether anybody has to walk, and pays them in USDC on Base when they do.');
   say('');
-  say('Type a question about a place. /help for commands.', 'dim');
+  say('Type a question about a place, then where.', 'dim');
+  say('e.g. is the road flooded right now?  ·  /help for commands', 'dim');
 }
 banner();
 
@@ -203,13 +215,89 @@ function prompt(mode) {
     mode === 'confirm' ? 'y' :
     'ask about any place, right now';
   box.focus();
+  showSuggestions();
 }
+
+/*
+ * Suggestions, shown the moment the prompt is touched.
+ *
+ * An empty terminal with a blinking cursor tells somebody nothing about what
+ * it will accept, and a judge with thirty seconds will type nothing rather
+ * than guess. Questions for the first step; for the second, places the network
+ * has actually been — so a stranger is steered towards the answer that already
+ * exists rather than paying to send somebody to a town nobody has visited.
+ */
+const ASKS = [
+  'is there traffic right now?',
+  'is the road flooded right now?',
+  'is there light in this area?',
+  'how long is the fuel queue?',
+  'is the market open?',
+  'is the shop still there?',
+];
+
+let PLACES = ['Etete Road', 'Oredo', 'Ikeja', 'Surulere'];
+fetch('/demo/places')
+  .then(r => r.json())
+  .then(d => { if (d.places && d.places.length) PLACES = d.places; })
+  .catch(() => {});
+
+const sug = document.getElementById('sug');
+let picked = -1;
+
+function suggestions() {
+  const typed = box.value.trim().toLowerCase();
+  const pool = step === 'place' ? PLACES : step === 'question' ? ASKS : [];
+  if (!pool.length) return [];
+  return pool.filter(x => !typed || x.toLowerCase().includes(typed)).slice(0, 5);
+}
+
+function showSuggestions() {
+  const list = suggestions();
+  if (!list.length) { sug.hidden = true; return; }
+  picked = -1;
+  sug.innerHTML = list
+    .map((x, i) => '<div data-i="' + i + '"><i>' +
+      (step === 'place' ? 'where' : 'ask') + '</i>' + esc(x) + '</div>')
+    .join('');
+  sug.hidden = false;
+  // mousedown, not click: blur would hide the list before a click landed.
+  sug.querySelectorAll('div').forEach((el, i) => {
+    el.onmousedown = (e) => { e.preventDefault(); box.value = list[i]; hideSuggestions(); submit(); };
+  });
+}
+
+function hideSuggestions() { sug.hidden = true; picked = -1; }
+
+box.addEventListener('focus', showSuggestions);
+box.addEventListener('input', showSuggestions);
+box.addEventListener('blur', () => setTimeout(hideSuggestions, 120));
 
 document.querySelectorAll('.hints button').forEach(b => {
   b.onclick = () => { box.value = b.dataset.c; submit(); };
 });
 
-box.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+box.addEventListener('keydown', (e) => {
+  const items = sug.hidden ? [] : Array.from(sug.querySelectorAll('div'));
+
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!items.length) return;
+    e.preventDefault();
+    picked = e.key === 'ArrowDown'
+      ? (picked + 1) % items.length
+      : (picked <= 0 ? items.length - 1 : picked - 1);
+    items.forEach((el, i) => el.className = i === picked ? 'on' : '');
+    return;
+  }
+
+  if (e.key === 'Escape') { hideSuggestions(); return; }
+
+  if (e.key === 'Enter') {
+    if (picked >= 0 && items[picked]) box.value = items[picked].textContent.replace(/^(ask|where)/, '');
+    hideSuggestions();
+    submit();
+  }
+});
 
 async function submit() {
   const text = box.value.trim();
@@ -248,11 +336,21 @@ function command(c) {
     say(G + 'a question, then a place   ask the agent');
     say(G + '/key                       an API key for your own agent');
     say(G + '/jobs                      jobs posted from this browser');
+    say(G + '/watch &lt;n&gt;                 follow job n for live updates');
     say(G + '/clear                     clear the screen');
     return;
   }
   if (name === 'clear') { log.innerHTML = ''; banner(); return; }
   if (name === 'jobs') return jobs();
+  if (name === 'watch') {
+    const n = parseInt(c.slice(1).split(' ')[1], 10);
+    const list = saved();
+    const j = list[n - 1];
+    if (!j) { say(G + 'no job ' + (n || '') + '. /jobs to see them.', 'warn'); return; }
+    const line = say(G + esc(j.question) + ' @ ' + esc(j.place) + ' — following...', 'dim');
+    watch(j.id, line);
+    return;
+  }
   if (name === 'key') return getKey();
   say(G + 'unknown command. /help', 'warn');
 }
@@ -322,7 +420,12 @@ function render(d, question, place) {
   say(G + 'somebody would have to go' + (why ? ' — ' + esc(why) : ''), 'warn');
 }
 
+/** Jobs already being polled, so following one twice does not double up. */
+const watching = new Set();
+
 function watch(id, line) {
+  if (watching.has(id)) return;
+  watching.add(id);
   const timer = setInterval(async () => {
     try {
       const j = await (await fetch('/demo/job/' + id)).json();
@@ -332,6 +435,7 @@ function watch(id, line) {
       }
       if (j.status === 'answered') {
         clearInterval(timer);
+        watching.delete(id);
         line.className = 'ln ok';
         line.innerHTML = G + 'answered by ' + esc(j.verifier || 'a verifier');
         say(esc(j.answer), 'big');
@@ -369,8 +473,10 @@ function remember(id, question, place) {
 async function jobs() {
   const list = saved();
   if (!list.length) { say(G + 'no jobs from this browser yet.', 'dim'); return; }
-  for (const j of list) {
-    const head = esc(j.question) + ' @ ' + esc(j.place) + ' — ';
+  say(G + 'follow one to get updates as they happen, or /watch <n>', 'dim');
+  for (let n = 0; n < list.length; n += 1) {
+    const j = list[n];
+    const head = '[' + (n + 1) + '] ' + esc(j.question) + ' @ ' + esc(j.place) + ' — ';
     const line = say(G + head + 'checking...', 'dim');
     try {
       const r = await (await fetch('/demo/job/' + j.id)).json();
@@ -398,10 +504,20 @@ async function jobs() {
         line.innerHTML = G + head + 'expired and refunded · ' +
           '<a href="https://basescan.org/tx/' + esc(r.refundTx) + '" target="_blank" rel="noopener">tx</a>';
       } else {
-        line.innerHTML = G + head + 'waiting for somebody to take it';
+        line.innerHTML = G + head + 'waiting for somebody to take it' + follow(j.id);
       }
+      if (r.status === 'in_progress') line.innerHTML += follow(j.id);
+      const f = line.querySelector('[data-follow]');
+      if (f) f.onclick = () => { f.remove(); watch(j.id, line); };
     } catch {}
   }
+}
+
+/** The control that starts live updates on a job from the list. */
+function follow(id) {
+  return watching.has(id)
+    ? '<span class="copy" style="cursor:default">following</span>'
+    : '<button class="copy" data-follow="' + esc(id) + '">follow</button>';
 }
 
 /** Asks the contract for an expired job's money back. */
