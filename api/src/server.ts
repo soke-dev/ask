@@ -14,6 +14,7 @@ import { tidyRouter } from './routes/tidy.js';
 import { pushRouter } from './routes/push.js';
 import { escrowRouter } from './routes/escrow.js';
 import { storageIsEphemeral, storageIsLocal } from './storage.js';
+import { agentAddress, hasAgentWallet } from './agentWallet.js';
 import { attachRealtime, realtimeStatus } from './realtime.js';
 import { chainStatus } from './chain.js';
 import { relayerStatus } from './relayer.js';
@@ -92,7 +93,9 @@ app.get('/health', async (_req, res) => {
     auth: hasPrivy() ? 'privy' : 'not_configured',
     admin: hasAdmin() ? 'password_set' : 'not_configured',
     vision: hasVision() ? 'configured' : 'not_configured',
-    agents: hasAgents() ? 'enabled' : 'off',
+    agents: hasAgents()
+      ? { enabled: true, wallet: agentAddress(), fundsOnChain: hasAgentWallet() }
+      : { enabled: false },
     storage: storageIsEphemeral
       ? 'disk (development only — files are lost on deploy)'
       : config.storageDriver,

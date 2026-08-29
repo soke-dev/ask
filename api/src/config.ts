@@ -70,7 +70,8 @@ export const config = {
      */
     demoKey: process.env.AGENT_DEMO_KEY ?? '',
     demoBudgetKobo: num('AGENT_DEMO_BUDGET_KOBO', 500_000),
-    demoBountyKobo: num('AGENT_DEMO_BOUNTY_KOBO', 50_000),
+    /** ₦150 — the app's own MIN_BOUNTY. A demo should not pay above the floor. */
+    demoBountyKobo: num('AGENT_DEMO_BOUNTY_KOBO', 15_000),
   },
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 
@@ -146,6 +147,18 @@ export const config = {
 
     /** Refuse to relay below this, since a stuck relayer strands withdrawals. */
     minGasWalletEth: num('MIN_GAS_WALLET_ETH', 0.0002),
+
+    /**
+     * The wallet an agent pays from.
+     *
+     * Distinct from the gas wallet, which relays and never custodies: this one
+     * holds USDC and spends it. Separate keys because they fail differently —
+     * an empty gas wallet stops withdrawals, an empty agent wallet stops
+     * agents, and one key doing both makes either failure look like the other.
+     *
+     * Server-side only. Never prefix it EXPO_PUBLIC_.
+     */
+    agentWalletKey: normaliseKey(process.env.AGENT_WALLET_PRIVATE_KEY ?? ''),
 
     /**
      * The AskEscrow proxy. The proxy address, never the implementation —

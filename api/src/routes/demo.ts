@@ -7,6 +7,7 @@ import { storage } from '../storage.js';
 import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 import { notify, nearbyVerifiers } from '../push.js';
 import { DEMO_PAGE } from '../demoPage.js';
+import { fundAsAgent } from '../agentWallet.js';
 
 export const demoRouter: Router = Router();
 
@@ -185,6 +186,16 @@ demoRouter.post('/ask', async (req, res) => {
 
   POSTED.set(ip, Date.now());
 
+  /**
+   * Locked on Base before the reply, not after.
+   *
+   * The point of the demo is that none of this is pretend, and the response
+   * says whether the money is actually in escrow — so it has to know. It costs
+   * a few seconds; the alternative is telling somebody their job is funded and
+   * finding out afterwards that it is not.
+   */
+  const funded = await fundAsAgent(created, bountyKobo);
+
   res.status(201).json({
     status: 'dispatched',
     source: 'dispatched',
@@ -193,6 +204,9 @@ demoRouter.post('/ask', async (req, res) => {
     costNgn: bountyKobo / 100,
     jobsLeft: money.jobsLeft - 1,
     poll: `/demo/job/${created}`,
+    chain: funded.ok
+      ? { funded: true, txHash: funded.txHash, usdc: funded.usdc, chainId: config.chain.chainId }
+      : { funded: false, why: funded.reason },
   });
 
   void (async () => {

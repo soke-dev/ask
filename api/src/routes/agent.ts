@@ -7,6 +7,7 @@ import { storage } from '../storage.js';
 import { ago, knownFor, triage } from '../agentTriage.js';
 import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 import { notify, nearbyVerifiers } from '../push.js';
+import { fundAsAgent } from '../agentWallet.js';
 
 export const agentRouter: Router = Router();
 
@@ -324,6 +325,11 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
     return q.rows[0]!.id;
   });
 
+  // Locked on Base from the agent's own wallet, the same as the demo — an
+  // agent's job and a person's job are the same job by the time a verifier
+  // sees it, and they should be the same on chain too.
+  const funded = await fundAsAgent(created, Math.round(bounty * 100));
+
   res.status(201).json({
     status: 'dispatched',
     source: 'dispatched',
@@ -332,6 +338,9 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
     costNgn: bounty,
     deadlineMinutes: Math.round(deadlineMinutes),
     poll: `/agent/ask/${created}`,
+    chain: funded.ok
+      ? { funded: true, txHash: funded.txHash, usdc: funded.usdc, chainId: config.chain.chainId }
+      : { funded: false, why: funded.reason },
   });
 
   // The same alert the app's own questions raise, so an agent's job reaches
