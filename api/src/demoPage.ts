@@ -228,13 +228,11 @@ $('#key').onclick = async () => {
       '<p class="meta" style="margin-top:14px;color:var(--ok)">Key for ' + esc(r.address) + '</p>' +
       '<input readonly value="' + esc(r.token) + '" style="margin-top:8px" onclick="this.select()">' +
       '<p class="meta">Copy it now — it is not stored and cannot be shown again.</p>' +
-      '<p class="meta" style="white-space:pre-wrap;margin-top:10px">curl -X POST ' + location.origin + '/agent/ask \
-' +
-      '  -H "Authorization: Bearer ' + esc(r.token.slice(0, 18)) + '…" \
-' +
-      '  -H "Content-Type: application/json" \
-' +
-      '  -d '{"question":"Is the gate open?","place":"Apapa"}'</p>';
+      '<pre class="meta" style="white-space:pre-wrap;margin-top:10px">' +
+      esc('curl -X POST ' + location.origin + '/agent/ask -H "Authorization: Bearer ' +
+          r.token.slice(0, 18) + '..." -H "Content-Type: application/json" -d ' +
+          JSON.stringify(JSON.stringify({ question: 'Is the gate open?', place: 'Apapa' }))) +
+      '</pre>';
   } catch (e) {
     box.innerHTML = '<p class="meta">' + esc(e.message || e) + '</p>';
   } finally {
