@@ -9,6 +9,7 @@ import { identityRouter } from './routes/identity.js';
 import { withdrawRouter } from './routes/withdraw.js';
 import { questionsRouter } from './routes/questions.js';
 import { agentRouter } from './routes/agent.js';
+import { demoRouter } from './routes/demo.js';
 import { tidyRouter } from './routes/tidy.js';
 import { pushRouter } from './routes/push.js';
 import { escrowRouter } from './routes/escrow.js';
@@ -113,6 +114,9 @@ app.use('/withdraw', withdrawRouter);
 app.use('/questions', questionsRouter);
 // Programs, not phones. The router 404s wholesale when AGENTS_ENABLED is off.
 app.use('/agent', agentRouter);
+// The one surface reachable with no credential at all. Spends from a capped
+// budget, because a job posted from a public page is a real job.
+app.use('/demo', demoRouter);
 app.use('/escrow', escrowRouter);
 app.use('/evidence', evidenceRouter);
 

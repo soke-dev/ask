@@ -43,6 +43,26 @@ export function mintKey(): MintedKey {
   return { token, hint: token.slice(0, PREFIX.length + 6), hash: hash(token) };
 }
 
+/**
+ * Resolves a raw key to the user it acts for, without a request.
+ *
+ * For the demo, which holds a key in configuration rather than receiving one
+ * in a header. Same lookup as the middleware so the two cannot disagree about
+ * what a valid key is.
+ */
+export async function resolveKey(
+  token: string,
+): Promise<{ keyId: string; userId: string } | null> {
+  if (!token.startsWith(PREFIX)) return null;
+  const row = await one<{ id: string; userId: string; revokedAt: Date | null }>(
+    `SELECT id, user_id AS "userId", revoked_at AS "revokedAt"
+       FROM api_keys WHERE token_hash = $1`,
+    [hash(token)],
+  );
+  if (!row || row.revokedAt) return null;
+  return { keyId: row.id, userId: row.userId };
+}
+
 function bearer(req: Request): string | null {
   const header = req.header('authorization') ?? '';
   if (!header.toLowerCase().startsWith('bearer ')) return null;

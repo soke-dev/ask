@@ -56,6 +56,21 @@ export const config = {
      * however good it looks.
      */
     maxAgeMinutes: num('AGENT_MAX_AGE_MINUTES', 1_440),
+
+    /**
+     * The key the public demo posts with, and what it may spend.
+     *
+     * A job posted from a page anybody can open is a real job: money leaves a
+     * real balance and somebody may walk somewhere for it. So the demo spends
+     * from one account against a ceiling, and says so when the ceiling is
+     * reached rather than failing in a way that looks like a bug.
+     *
+     * Unset means the demo cannot post at all, which is the right default for
+     * a server nobody has given a budget to.
+     */
+    demoKey: process.env.AGENT_DEMO_KEY ?? '',
+    demoBudgetKobo: num('AGENT_DEMO_BUDGET_KOBO', 500_000),
+    demoBountyKobo: num('AGENT_DEMO_BOUNTY_KOBO', 50_000),
   },
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 
