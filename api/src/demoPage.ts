@@ -96,6 +96,8 @@ export const DEMO_PAGE = `<!doctype html>
 
   <div id="out"></div>
 
+  <section id="hist"></section>
+
   <section class="card" style="margin-top:32px">
     <div class="tag" style="color:var(--faint)">For your own agent</div>
     <h2 style="font-size:19px;margin:8px 0 6px;font-weight:800">Get an API key</h2>
@@ -178,6 +180,7 @@ function render(d) {
       chainLine(d.chain) +
       '<p class="meta"><span class="spin"></span> waiting for a verifier to take it…</p>' +
       '<p class="meta">' + d.jobsLeft + ' demo jobs left</p></div>';
+    remember(d.id, $('#q').value, $('#p').value);
     watch(d.id);
     return;
   }
@@ -238,6 +241,70 @@ $('#key').onclick = async () => {
     btn.disabled = false; btn.textContent = 'Connect wallet & get a key';
   }
 };
+
+/**
+ * Jobs this browser has posted, across visits.
+ *
+ * A job takes as long as somebody takes to walk somewhere, which is longer
+ * than anybody keeps a tab open. Without this, closing the page lost the only
+ * reference to a job that was already paid for and still running — the answer
+ * arrived and there was nobody left watching for it.
+ *
+ * Held in localStorage rather than on the server, because the page has no
+ * account to hang it on and asking for one to watch a demo would defeat the
+ * point of a page anybody can open.
+ */
+const STORE = 'confam.demo.jobs';
+
+function saved() {
+  try { return JSON.parse(localStorage.getItem(STORE) || '[]'); } catch { return []; }
+}
+
+function remember(id, question, place) {
+  try {
+    const list = saved().filter(j => j.id !== id);
+    list.unshift({ id, question, place, at: Date.now() });
+    localStorage.setItem(STORE, JSON.stringify(list.slice(0, 5)));
+  } catch {}
+  history_();
+}
+
+async function history_() {
+  const list = saved();
+  const box = $('#hist');
+  if (!list.length) { box.innerHTML = ''; return; }
+
+  box.innerHTML =
+    '<div class="tag" style="color:var(--faint);margin-top:30px">Your jobs</div>' +
+    list.map(j =>
+      '<div class="card" id="h-' + esc(j.id) + '" style="margin-top:10px">' +
+      '<p class="meta">' + esc(j.place) + ' · ' + new Date(j.at).toLocaleString() + '</p>' +
+      '<p style="margin:6px 0 0">' + esc(j.question) + '</p>' +
+      '<p class="meta" id="hs-' + esc(j.id) + '"><span class="spin"></span> checking…</p></div>'
+    ).join('');
+
+  for (const j of list) {
+    try {
+      const r = await (await fetch('/demo/job/' + j.id)).json();
+      const el = document.querySelector('#hs-' + CSS.escape(j.id));
+      if (!el) continue;
+      if (r.status === 'answered') {
+        el.parentElement.className = 'card hit';
+        el.innerHTML = '<strong style="color:var(--fg);font-size:17px">' + esc(r.answer) + '</strong><br>' +
+          esc(r.verifier || 'a verifier') + ' walked there' +
+          (r.metresFromPlace != null ? ' · ' + r.metresFromPlace + 'm from the pin' : '') +
+          ' · <a href="' + esc(r.proof) + '" target="_blank" rel="noopener">proof →</a>' +
+          (r.evidence || []).map(u => '<img src="' + esc(u) + '" alt="evidence">').join('');
+      } else if (r.status === 'in_progress') {
+        el.innerHTML = '<span class="spin"></span> ' + esc(r.verifier || 'somebody') + ' took it and is walking there…';
+      } else {
+        el.innerHTML = 'waiting for somebody to take it';
+      }
+    } catch {}
+  }
+}
+
+history_();
 
 /**
  * The escrow, said as something openable.
