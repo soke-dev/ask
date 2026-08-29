@@ -13,6 +13,9 @@ import { fundAsAgent } from '../agentWallet.js';
 
 export const agentRouter: Router = Router();
 
+/** Mirrors MIN_BOUNTY in constants/money.ts. What a job costs by default. */
+const MIN_BOUNTY_NGN = 150;
+
 /**
  * The door programs come through.
  *
@@ -388,7 +391,15 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
     return;
   }
 
-  const bounty = Number(body.bountyNgn ?? 500);
+  /**
+   * ₦150 unless the caller asks for more.
+   *
+   * It defaulted to ₦500, which meant an agent that omitted the field spent
+   * three times the floor without ever choosing to — and since anybody with a
+   * wallet can now mint a key, that is somebody else's default spending this
+   * wallet. The floor is what a job costs unless a caller decides otherwise.
+   */
+  const bounty = Number(body.bountyNgn ?? MIN_BOUNTY_NGN);
   const deadlineMinutes = Number(body.deadlineMinutes ?? 60);
   if (!Number.isFinite(bounty) || bounty <= 0) {
     res.status(400).json({ error: 'bad_bounty' });
