@@ -64,8 +64,19 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
   );
   if (!q) return { ok: false, reason: 'no_question' };
 
-  const rate = await ngnRate();
-  if (!rate) return { ok: false, reason: 'no_rate' };
+  /**
+   * A rate, even when the provider is unreachable.
+   *
+   * This used to give up, and giving up means a dispatched job with nothing
+   * locked against it — worse than pricing it a few percent off. Which rate
+   * was used is written to the row, so the approximation is visible rather
+   * than silent.
+   */
+  const live = await ngnRate();
+  const ngnPerUsd = live?.ngnPerUsd ?? config.rates.fallbackNgnPerUsd;
+  if (!live) {
+    console.warn('[agent] no live FX rate, pricing at the fallback', ngnPerUsd);
+  }
 
   const jobId = jobIdFor(questionId);
   // Reused if one was already issued, so a retry after a failed relay signs
@@ -76,7 +87,7 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
 
   // Rounded up at six decimals, the same way the app prices a bounty, so an
   // agent and a person asking the same question lock the same amount.
-  const usdc = Math.ceil((bountyKobo / 100 / rate.ngnPerUsd) * 1e6) / 1e6;
+  const usdc = Math.ceil((bountyKobo / 100 / ngnPerUsd) * 1e6) / 1e6;
 
   const { typedData } = fundPayload({ jobId, asker, usdc, validBefore, salt });
 
@@ -99,7 +110,7 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
               fund_rate = COALESCE(fund_rate, $5),
               fund_tx  = COALESCE(fund_tx, $6)
         WHERE id = $1`,
-      [questionId, jobId, salt, usdc, rate.ngnPerUsd, txHash],
+      [questionId, jobId, salt, usdc, ngnPerUsd, txHash],
     );
 
   /**

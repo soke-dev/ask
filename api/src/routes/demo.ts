@@ -97,7 +97,14 @@ demoRouter.get('/budget', async (_req, res) => {
  * seeing. Only the dispatch half is rationed, because only that half spends.
  */
 demoRouter.post('/ask', async (req, res) => {
-  const body = req.body as { question?: unknown; place?: unknown; lat?: unknown; lng?: unknown };
+  const body = req.body as {
+    question?: unknown;
+    place?: unknown;
+    lat?: unknown;
+    lng?: unknown;
+    /** Set once the visitor has agreed to spend. Absent means only decide. */
+    confirm?: unknown;
+  };
   const question = String(body.question ?? '').trim().slice(0, 200);
   const place = String(body.place ?? '').trim().slice(0, 120);
 
@@ -132,6 +139,37 @@ demoRouter.post('/ask', async (req, res) => {
   }
 
   // ── From here it spends ───────────────────────────────────────────────────
+
+  /**
+   * Decided, then asked.
+   *
+   * Sending somebody costs money and puts a person in a street, and doing that
+   * on the same keystroke that asked a question gives nobody a chance to say
+   * no. The judgment is free and runs for everybody; the spending waits for an
+   * answer.
+   *
+   * The checks that would refuse anyway run first, so a visitor is not asked
+   * to approve something that was never going to happen.
+   */
+  if (body.confirm !== true) {
+    const key = config.agents.demoKey;
+    const money = await budget();
+    const blocked =
+      !key ? 'no_demo_key'
+      : money.jobsLeft < 1 ? 'budget_spent'
+      : alreadyPosted(callerIp(req as never)) ? 'already_posted'
+      : null;
+
+    res.json({
+      status: blocked ? 'would_dispatch' : 'needs_confirm',
+      because: verdict.because,
+      reason: blocked,
+      costNgn: config.agents.demoBountyKobo / 100,
+      question,
+      place,
+    });
+    return;
+  }
 
   const key = config.agents.demoKey;
   if (!key) {

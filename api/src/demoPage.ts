@@ -1,212 +1,402 @@
 /**
- * The page a judge opens.
+ * The page a judge opens: a terminal.
  *
- * Served as a string rather than a file because `tsc` copies neither, and a
- * demo that works locally and 404s in production because a static asset was
- * not in the build is the worst possible way to lose a submission.
+ * It was a marketing page with a form, which was the wrong shape twice over.
+ * The audience is people who read logs, and more to the point the agent's work
+ * is a sequence — it reads what the network knows, weighs it, decides, spends,
+ * dispatches — and a card that appears fully formed hides every part of that.
+ * A transcript shows the thinking, and several questions in a row build a
+ * session rather than replacing one another.
  *
- * No framework and no CDN. It is one form, one result, and a poll — anything
- * more is a dependency that can fail on somebody else's network at three in
- * the morning, which is exactly when this will be opened.
+ * Served as a string rather than a file because tsc copies neither, and a demo
+ * that works locally and 404s in production over a missing asset is the worst
+ * available way to lose a submission.
+ *
+ * No framework, no CDN, and no backslashes. Anything escaped in here has to
+ * survive a TypeScript template literal and then a JavaScript string literal,
+ * and twice it did not — silently, because tsc sees a valid string while the
+ * browser sees a SyntaxError that kills every handler on the page. The build
+ * parses this script and fails if it cannot.
  */
 export const DEMO_PAGE = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Confam — ask the physical world</title>
+<title>confam — ask the physical world</title>
 <style>
   :root {
-    --bg:#0A0A0A; --surface:#141414; --line:#262626; --fg:#FAFAFA;
-    --muted:#A3A3A3; --faint:#666; --accent:#FF6B00; --ok:#22C55E;
+    --bg:#080808; --line:#1F1F1F;
+    --fg:#D4D4D4; --dim:#6B6B6B; --faint:#454545;
+    --accent:#FF6B00; --ok:#3DD68C; --warn:#FFB020;
   }
   * { box-sizing:border-box; }
+  html, body { height:100%; }
   body {
     margin:0; background:var(--bg); color:var(--fg);
-    font:15px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-    padding:28px 18px 64px;
+    font:13.5px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    display:flex; justify-content:center; padding:0 12px;
   }
-  main { max-width:640px; margin:0 auto; }
-  .mark { display:flex; align-items:center; gap:10px; margin-bottom:26px; }
-  .plate {
-    width:26px; height:26px; border:2px solid var(--accent); border-radius:6px;
-    display:grid; place-items:center; color:var(--accent); font-weight:800; font-size:14px;
+  .term {
+    width:100%; max-width:760px; height:100dvh;
+    display:flex; flex-direction:column;
+    border-left:1px solid var(--line); border-right:1px solid var(--line);
   }
-  .word { font-weight:800; letter-spacing:1.6px; font-size:18px; }
-  h1 { font-size:30px; line-height:1.15; margin:0 0 10px; font-weight:800; letter-spacing:-.4px; }
-  h1 em { color:var(--accent); font-style:normal; }
-  .sub { color:var(--muted); margin:0 0 26px; }
-  form { border:2px solid var(--line); background:var(--surface); border-radius:2px; padding:16px; }
-  label { display:block; font-size:11px; letter-spacing:1.2px; text-transform:uppercase; color:var(--faint); margin-bottom:6px; }
+
+  .bar {
+    display:flex; align-items:center; gap:9px;
+    padding:11px 14px; border-bottom:1px solid var(--line);
+    color:var(--dim); font-size:12px; flex:none;
+  }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); flex:none; }
+  .bar b { color:var(--accent); font-weight:700; letter-spacing:.5px; }
+  .bar .right { margin-left:auto; color:var(--faint); }
+
+  .log { flex:1; overflow-y:auto; padding:16px 14px 10px; scrollbar-width:thin; }
+  .log::-webkit-scrollbar { width:8px; }
+  .log::-webkit-scrollbar-thumb { background:#1C1C1C; }
+
+  .ln { white-space:pre-wrap; overflow-wrap:anywhere; margin:0 0 2px; }
+  .ln.you   { color:var(--fg); margin-top:15px; }
+  .ln.you i { color:var(--accent); font-style:normal; }
+  .ln.sys   { color:var(--dim); }
+  .ln.ok    { color:var(--ok); }
+  .ln.go    { color:var(--accent); }
+  .ln.warn  { color:var(--warn); }
+  .ln.big   { color:#fff; font-size:17px; font-weight:700; margin:7px 0 5px; }
+  .ln.dim   { color:var(--faint); }
+  .ln a     { color:var(--accent); }
+  .ln img   { display:block; max-width:340px; width:100%; margin:9px 0 5px; border:1px solid var(--line); }
+  .gutter   { color:var(--faint); }
+
+  .copy {
+    background:transparent; border:1px solid var(--line); color:var(--dim);
+    font:inherit; font-size:11px; padding:1px 7px; margin-left:8px;
+    cursor:pointer; border-radius:2px; vertical-align:2px;
+  }
+  .copy:hover { border-color:var(--accent); color:var(--accent); }
+  .copy.done { border-color:var(--ok); color:var(--ok); }
+
+  .hints { padding:0 14px 12px; display:flex; flex-wrap:wrap; gap:6px; flex:none; }
+  .hints button {
+    background:transparent; border:1px solid var(--line); color:var(--dim);
+    font:inherit; font-size:11.5px; padding:4px 9px; cursor:pointer; border-radius:2px;
+  }
+  .hints button:hover { border-color:var(--accent); color:var(--fg); }
+
+  .row {
+    display:flex; align-items:center; gap:9px;
+    padding:12px 14px; border-top:1px solid var(--line); flex:none;
+  }
+  .ps1 { color:var(--accent); font-weight:700; flex:none; }
   input {
-    width:100%; background:var(--bg); border:2px solid var(--line); border-radius:2px;
-    color:var(--fg); padding:11px 12px; font:inherit; margin-bottom:14px;
+    flex:1; background:transparent; border:0; outline:none; color:var(--fg);
+    font:inherit; padding:0; caret-color:var(--accent); min-width:0;
   }
-  input:focus { outline:none; border-color:var(--accent); }
-  button {
-    width:100%; background:var(--accent); color:#0A0A0A; border:0; border-radius:2px;
-    padding:13px; font:inherit; font-weight:800; letter-spacing:1px; text-transform:uppercase;
-    cursor:pointer;
-  }
-  button:disabled { background:#2A2A2A; color:var(--faint); cursor:default; }
-  .examples { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0 0; }
-  .examples button {
-    width:auto; background:transparent; border:2px solid var(--line); color:var(--muted);
-    padding:6px 10px; font-size:12px; text-transform:none; letter-spacing:0; font-weight:500;
-  }
-  .card { border:2px solid var(--line); border-radius:2px; padding:16px; margin-top:16px; background:var(--surface); }
-  .card.hit { border-color:var(--ok); }
-  .card.go { border-color:var(--accent); }
-  .tag { font-size:11px; letter-spacing:1.2px; text-transform:uppercase; }
-  .tag.hit { color:var(--ok); } .tag.go { color:var(--accent); }
-  .why { color:var(--fg); margin:8px 0 0; }
-  .meta { color:var(--faint); font-size:13px; margin-top:10px; font-family:ui-monospace,Menlo,monospace; }
-  .answer { font-size:19px; font-weight:700; margin:10px 0 0; }
-  img { width:100%; border:2px solid var(--line); border-radius:2px; margin-top:12px; display:block; }
-  a { color:var(--accent); }
-  .foot { color:var(--faint); font-size:13px; margin-top:26px; }
-  .spin { display:inline-block; width:11px; height:11px; border:2px solid var(--faint);
-          border-top-color:var(--accent); border-radius:50%; animation:s .7s linear infinite; }
-  @keyframes s { to { transform:rotate(360deg); } }
+  input::placeholder { color:#333; }
 </style>
 </head>
 <body>
-<main>
-  <div class="mark"><div class="plate">C</div><div class="word">CONFAM</div></div>
+<div class="term">
+  <div class="bar">
+    <span class="dot"></span>
+    <b>confam</b>
+    <span>the physical world, on demand</span>
+    <span class="right" id="budget"></span>
+  </div>
 
-  <h1>Ask the physical world.<br><em>A human goes and looks.</em></h1>
-  <p class="sub">
-    This agent answers questions no API can. It first checks whether somebody nearby
-    already verified that place and whether the answer still holds. If not, it pays
-    a real person in Nigeria to walk there and photograph it.
-  </p>
+  <div class="log" id="log"></div>
 
-  <form id="f">
-    <label for="q">What do you want checked?</label>
-    <input id="q" placeholder="Is the road flooded right now?" maxlength="200" required>
-    <label for="p">Where?</label>
-    <input id="p" placeholder="Oredo" maxlength="120" required>
-    <button id="go" type="submit">Ask the agent</button>
-    <div class="examples">
-      <button type="button" data-q="Is there light in Etete?" data-p="Etete Road">light in Etete</button>
-      <button type="button" data-q="Is the road flooded right now?" data-p="Oredo">flooding in Oredo</button>
-      <button type="button" data-q="Is the market open?" data-p="Ikeja">market in Ikeja</button>
-    </div>
-  </form>
+  <div class="hints">
+    <button data-c="is there light in etete?">light in Etete</button>
+    <button data-c="is the road flooded right now?">flooding</button>
+    <button data-c="/key">/key</button>
+    <button data-c="/jobs">/jobs</button>
+    <button data-c="/help">/help</button>
+  </div>
 
-  <div id="out"></div>
-
-  <section id="hist"></section>
-
-  <section class="card" style="margin-top:32px">
-    <div class="tag" style="color:var(--faint)">For your own agent</div>
-    <h2 style="font-size:19px;margin:8px 0 6px;font-weight:800">Get an API key</h2>
-    <p style="color:var(--muted);margin:0 0 14px">
-      Sign a message with your wallet. No email, no account, no gas — the signature
-      proves the address is yours and the key is bound to it.
-    </p>
-    <button id="key" type="button">Connect wallet &amp; get a key</button>
-    <div id="keyout"></div>
-  </section>
-
-  <p class="foot" id="budget"></p>
-  <p class="foot">
-    Jobs posted here are real: money leaves a real balance and a real person may walk
-    somewhere. The demo budget is capped and one job is allowed per visitor.
-  </p>
-</main>
+  <div class="row">
+    <span class="ps1" id="ps1">&gt;</span>
+    <input id="in" autocomplete="off" autofocus placeholder="ask about any place, right now">
+  </div>
+</div>
 
 <script>
-const $ = (s) => document.querySelector(s);
-const out = $('#out'), go = $('#go');
-let polling = null;
-
-document.querySelectorAll('.examples button').forEach(b =>
-  b.onclick = () => { $('#q').value = b.dataset.q; $('#p').value = b.dataset.p; });
+const log = document.getElementById('log');
+const box = document.getElementById('in');
+const ps1 = document.getElementById('ps1');
 
 function esc(s) {
-  return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 }
 
-async function budget() {
-  try {
-    const b = await (await fetch('/demo/budget')).json();
-    $('#budget').textContent = b.configured
-      ? b.jobsLeft + ' job' + (b.jobsLeft === 1 ? '' : 's') + ' left in the demo budget.'
-      : 'Dispatch is not funded on this server, so the agent will decide but not send anybody.';
-  } catch {}
+/** Appends a line and keeps the view pinned to the bottom, as a terminal does. */
+function say(html, cls) {
+  const p = document.createElement('p');
+  p.className = 'ln ' + (cls || 'sys');
+  p.innerHTML = html;
+  log.appendChild(p);
+  log.scrollTop = log.scrollHeight;
+  return p;
 }
-budget();
 
-$('#f').onsubmit = async (e) => {
-  e.preventDefault();
-  if (polling) { clearInterval(polling); polling = null; }
-  go.disabled = true; go.textContent = 'Thinking…';
-  out.innerHTML = '';
+/**
+ * Puts a copy control on a line, with a fallback that actually works.
+ *
+ * navigator.clipboard needs a secure context, and this page is opened over
+ * plain http on a LAN address as often as not — where it is simply absent. The
+ * textarea route is ugly and works everywhere, which is the right trade for a
+ * key somebody is about to paste into a terminal.
+ */
+function withCopy(line, text) {
+  const btn = line.querySelector('.copy');
+  if (!btn) return line;
+  btn.onclick = async () => {
+    let ok = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch {}
+    if (!ok) {
+      const t = document.createElement('textarea');
+      t.value = text;
+      t.style.position = 'fixed';
+      t.style.opacity = '0';
+      document.body.appendChild(t);
+      t.select();
+      try { ok = document.execCommand('copy'); } catch {}
+      t.remove();
+    }
+    btn.textContent = ok ? 'copied' : 'select it';
+    btn.className = ok ? 'copy done' : 'copy';
+    setTimeout(() => { btn.textContent = 'copy'; btn.className = 'copy'; }, 1600);
+  };
+  return line;
+}
 
+/** Indents continuation lines under the one that introduced them. */
+const G = '<span class="gutter">  </span>';
+
+function banner() {
+  say('confam — questions no API can answer.', 'ok');
+  say('An agent decides whether anybody has to walk, and pays them in USDC on Base when they do.');
+  say('');
+  say('Type a question about a place. /help for commands.', 'dim');
+}
+banner();
+
+/*
+ * Two steps, because a job needs a place and asking for both on one line makes
+ * people guess at a syntax. The prompt itself says which half it wants.
+ */
+let step = 'question';
+let pending = '';
+
+function prompt(mode) {
+  step = mode;
+  ps1.textContent = mode === 'place' ? 'where?' : mode === 'confirm' ? 'send? [y/n]' : '>';
+  box.placeholder =
+    mode === 'place' ? 'oredo' :
+    mode === 'confirm' ? 'y' :
+    'ask about any place, right now';
+  box.focus();
+}
+
+document.querySelectorAll('.hints button').forEach(b => {
+  b.onclick = () => { box.value = b.dataset.c; submit(); };
+});
+
+box.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+
+async function submit() {
+  const text = box.value.trim();
+  if (!text) return;
+  box.value = '';
+
+  if (step === 'question') {
+    if (text[0] === '/') { say('<i>&gt;</i> ' + esc(text), 'you'); return command(text); }
+    pending = text;
+    say('<i>&gt;</i> ' + esc(text), 'you');
+    prompt('place');
+    return;
+  }
+
+  if (step === 'confirm') {
+    say('<i>send? [y/n]</i> ' + esc(text), 'you');
+    const yes = /^(y|yes)$/i.test(text);
+    prompt('question');
+    if (!yes) { say(G + 'nothing sent. no money moved.', 'dim'); return; }
+    await ask(offer.question, offer.place, true);
+    return;
+  }
+
+  say('<i>where?</i> ' + esc(text), 'you');
+  const place = text;
+  prompt('question');
+  await ask(pending, place);
+}
+
+/** What the agent proposed to spend on, held while the y/n is answered. */
+let offer = { question: '', place: '' };
+
+function command(c) {
+  const name = c.slice(1).split(' ')[0];
+  if (name === 'help') {
+    say(G + 'a question, then a place   ask the agent');
+    say(G + '/key                       an API key for your own agent');
+    say(G + '/jobs                      jobs posted from this browser');
+    say(G + '/clear                     clear the screen');
+    return;
+  }
+  if (name === 'clear') { log.innerHTML = ''; banner(); return; }
+  if (name === 'jobs') return jobs();
+  if (name === 'key') return getKey();
+  say(G + 'unknown command. /help', 'warn');
+}
+
+async function ask(question, place, confirm) {
+  const thinking = say(G + (confirm ? 'locking the bounty on Base...' : 'checking what the network already knows...'), 'dim');
   try {
     const r = await fetch('/demo/ask', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: $('#q').value, place: $('#p').value }),
+      body: JSON.stringify({ question, place, confirm: confirm === true }),
     });
-    render(await r.json());
-  } catch (err) {
-    out.innerHTML = '<div class="card"><div class="tag">Error</div><p class="why">' + esc(err) + '</p></div>';
-  } finally {
-    go.disabled = false; go.textContent = 'Ask the agent';
-    budget();
+    const d = await r.json();
+    thinking.remove();
+    render(d, question, place);
+  } catch (e) {
+    thinking.remove();
+    say(G + 'could not reach the agent — ' + esc(e.message || e), 'warn');
   }
-};
+  budget();
+}
 
-function render(d) {
+function render(d, question, place) {
   if (d.status === 'answered') {
-    out.innerHTML =
-      '<div class="card hit"><div class="tag hit">Already answered · ₦' + d.costNgn + '</div>' +
-      '<p class="answer">' + esc(d.answer) + '</p>' +
-      '<p class="why">' + esc(d.because) + '</p>' +
-      '<p class="meta">asked as “' + esc(d.askedAs) + '” · ' + d.ageMinutes + ' min ago' +
-      (d.verifier ? ' · ' + esc(d.verifier) : '') + '</p>' +
-      (d.evidence || []).map(u => '<img src="' + esc(u) + '" alt="evidence">').join('') +
-      '<p class="meta"><a href="/escrow/' + esc(d.questionId) + '/proof" target="_blank" rel="noopener">' +
-      'verify this on Base — hashes, escrow and every transaction →</a></p>' +
-      '</div>';
+    say(G + 'somebody has already been here.', 'ok');
+    say(G + esc(d.because), 'dim');
+    say(esc(d.answer), 'big');
+    say(G + 'asked as "' + esc(d.askedAs) + '" · ' + d.ageMinutes + ' min ago' +
+        (d.verifier ? ' · checked by ' + esc(d.verifier) : ''), 'dim');
+    (d.evidence || []).forEach(u => say('<img src="' + esc(u) + '" alt="evidence">', 'dim'));
+    say(G + '<a href="/escrow/' + esc(d.questionId) + '/proof" target="_blank" rel="noopener">' +
+        'verify on Base →</a> · cost ₦' + d.costNgn, 'dim');
+    return;
+  }
+
+  if (d.status === 'needs_confirm') {
+    say(G + esc(d.because), 'dim');
+    say(G + 'nobody has been. sending somebody costs ₦' + d.costNgn +
+        ' and locks that in USDC on Base.', 'go');
+    offer = { question: d.question, place: d.place };
+    prompt('confirm');
     return;
   }
 
   if (d.status === 'dispatched') {
-    out.innerHTML =
-      '<div class="card go" id="job"><div class="tag go">Somebody has to go · ₦' + d.costNgn + '</div>' +
-      '<p class="why">' + esc(d.because) + '</p>' +
-      chainLine(d.chain) +
-      '<p class="meta"><span class="spin"></span> waiting for a verifier to take it…</p>' +
-      '<p class="meta">' + d.jobsLeft + ' demo jobs left</p></div>';
-    remember(d.id, $('#q').value, $('#p').value);
-    watch(d.id);
+    say(G + esc(d.because), 'dim');
+    say(G + 'nobody has been. sending somebody. ₦' + d.costNgn, 'go');
+    if (d.chain && d.chain.funded) {
+      say(G + d.chain.usdc + ' USDC locked in escrow on Base · ' +
+          '<a href="https://basescan.org/tx/' + esc(d.chain.txHash) + '" target="_blank" rel="noopener">' +
+          esc(String(d.chain.txHash).slice(0, 22)) + '...</a>', 'dim');
+    } else if (d.chain) {
+      say(G + 'not funded on chain — ' + esc(d.chain.why || 'unknown'), 'warn');
+    }
+    const live = say(G + 'waiting for a verifier to take it...', 'dim');
+    remember(d.id, question, place);
+    watch(d.id, live);
     return;
   }
 
   const why = {
-    no_demo_key: 'Dispatch is not funded on this server.',
-    budget_spent: 'The demo budget is used up, so no more jobs can be posted.',
-    already_posted: 'You have already posted a job. One per visitor.',
-    bad_demo_key: 'The demo key is not valid.',
+    no_demo_key: 'dispatch is not funded on this server.',
+    budget_spent: 'the budget is used up, so no more jobs can be posted.',
+    already_posted: 'you have already posted a job. one per visitor.',
+    bad_demo_key: 'the demo key is not valid.',
   }[d.reason] || '';
-
-  out.innerHTML =
-    '<div class="card go"><div class="tag go">Somebody would have to go</div>' +
-    '<p class="why">' + esc(d.because) + '</p>' +
-    (why ? '<p class="meta">' + esc(why) + '</p>' : '') + '</div>';
+  say(G + esc(d.because), 'dim');
+  say(G + 'somebody would have to go' + (why ? ' — ' + esc(why) : ''), 'warn');
 }
 
-$('#key').onclick = async () => {
-  const btn = $('#key'), box = $('#keyout');
+function watch(id, line) {
+  const timer = setInterval(async () => {
+    try {
+      const j = await (await fetch('/demo/job/' + id)).json();
+      if (j.status === 'in_progress') {
+        line.className = 'ln go';
+        line.innerHTML = G + esc(j.verifier || 'somebody') + ' took it and is walking there...';
+      }
+      if (j.status === 'answered') {
+        clearInterval(timer);
+        line.className = 'ln ok';
+        line.innerHTML = G + 'answered by ' + esc(j.verifier || 'a verifier');
+        say(esc(j.answer), 'big');
+        say(G + (j.metresFromPlace != null ? j.metresFromPlace + 'm from the pin · ' : '') +
+            (j.capturedAt ? new Date(j.capturedAt).toUTCString() : ''), 'dim');
+        (j.evidence || []).forEach(u => say('<img src="' + esc(u) + '" alt="evidence">', 'dim'));
+        say(G + '<a href="' + esc(j.proof) + '" target="_blank" rel="noopener">verify on Base →</a>', 'dim');
+      }
+    } catch {}
+  }, 5000);
+}
+
+/*
+ * Jobs this browser has posted.
+ *
+ * A job takes as long as somebody takes to walk somewhere, which is longer
+ * than anybody keeps a tab open. localStorage rather than the server: the page
+ * has no account to hang it on, and asking for one in order to watch a demo
+ * would defeat the point of a page anybody can open.
+ */
+const STORE = 'confam.demo.jobs';
+
+function saved() {
+  try { return JSON.parse(localStorage.getItem(STORE) || '[]'); } catch { return []; }
+}
+
+function remember(id, question, place) {
+  try {
+    const list = saved().filter(j => j.id !== id);
+    list.unshift({ id, question, place, at: Date.now() });
+    localStorage.setItem(STORE, JSON.stringify(list.slice(0, 8)));
+  } catch {}
+}
+
+async function jobs() {
+  const list = saved();
+  if (!list.length) { say(G + 'no jobs from this browser yet.', 'dim'); return; }
+  for (const j of list) {
+    const head = esc(j.question) + ' @ ' + esc(j.place) + ' — ';
+    const line = say(G + head + 'checking...', 'dim');
+    try {
+      const r = await (await fetch('/demo/job/' + j.id)).json();
+      if (r.status === 'answered') {
+        line.className = 'ln ok';
+        line.innerHTML = G + head + esc(r.answer) +
+          ' · <a href="' + esc(r.proof) + '" target="_blank" rel="noopener">proof</a>';
+      } else if (r.status === 'in_progress') {
+        line.className = 'ln go';
+        line.innerHTML = G + head + esc(r.verifier || 'somebody') + ' is walking there';
+      } else {
+        line.innerHTML = G + head + 'waiting for somebody to take it';
+      }
+    } catch {}
+  }
+}
+
+async function getKey() {
   if (!window.ethereum) {
-    box.innerHTML = '<p class="meta">No wallet found in this browser. Install MetaMask, or call POST /agent/keys/challenge yourself.</p>';
+    say(G + 'no wallet in this browser. POST /agent/keys/challenge yourself instead.', 'warn');
     return;
   }
-  btn.disabled = true; btn.textContent = 'Check your wallet…';
+  say(G + 'check your wallet...', 'dim');
   try {
-    const [address] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    const address = accounts[0];
 
     const c = await (await fetch('/agent/keys/challenge', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -222,133 +412,44 @@ $('#key').onclick = async () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ address, signature }),
     })).json();
-    if (!r.token) throw new Error(r.detail || r.error || 'could not mint');
+    if (!r.token) throw new Error(r.detail || r.error || 'could not mint a key');
 
-    box.innerHTML =
-      '<p class="meta" style="margin-top:14px;color:var(--ok)">Key for ' + esc(r.address) + '</p>' +
-      '<input readonly value="' + esc(r.token) + '" style="margin-top:8px" onclick="this.select()">' +
-      '<p class="meta">Copy it now — it is not stored and cannot be shown again.</p>' +
-      '<pre class="meta" style="white-space:pre-wrap;margin-top:10px">' +
-      esc('curl -X POST ' + location.origin + '/agent/ask -H "Authorization: Bearer ' +
-          r.token.slice(0, 18) + '..." -H "Content-Type: application/json" -d ' +
-          JSON.stringify(JSON.stringify({ question: 'Is the gate open?', place: 'Apapa' }))) +
-      '</pre>';
+    const curl = 'curl -X POST ' + location.origin + '/agent/ask' +
+      ' -H "Authorization: Bearer ' + r.token + '"' +
+      ' -H "Content-Type: application/json"' +
+      " -d '" + JSON.stringify({ question: 'Is the gate open?', place: 'Apapa' }) + "'";
+
+    say(G + 'key for ' + esc(r.address), 'ok');
+    withCopy(say(G + esc(r.token) + '<button class="copy">copy</button>', 'big'), r.token);
+    say(G + 'copy it now — it is not stored and cannot be shown again.', 'warn');
+    say('');
+    // The whole command, with the real key in it rather than the truncated one
+    // shown, so what gets pasted is what actually runs.
+    withCopy(
+      say(G + esc('curl -X POST ' + location.origin + '/agent/ask -H "Authorization: Bearer ' +
+        r.token.slice(0, 20) + '..." -H "Content-Type: application/json" -d ' +
+        JSON.stringify({ question: 'Is the gate open?', place: 'Apapa' })) +
+        '<button class="copy">copy</button>', 'dim'),
+      curl,
+    );
   } catch (e) {
-    box.innerHTML = '<p class="meta">' + esc(e.message || e) + '</p>';
-  } finally {
-    btn.disabled = false; btn.textContent = 'Connect wallet & get a key';
+    say(G + esc(e.message || e), 'warn');
   }
-};
-
-/**
- * Jobs this browser has posted, across visits.
- *
- * A job takes as long as somebody takes to walk somewhere, which is longer
- * than anybody keeps a tab open. Without this, closing the page lost the only
- * reference to a job that was already paid for and still running — the answer
- * arrived and there was nobody left watching for it.
- *
- * Held in localStorage rather than on the server, because the page has no
- * account to hang it on and asking for one to watch a demo would defeat the
- * point of a page anybody can open.
- */
-const STORE = 'confam.demo.jobs';
-
-function saved() {
-  try { return JSON.parse(localStorage.getItem(STORE) || '[]'); } catch { return []; }
 }
 
-function remember(id, question, place) {
+async function budget() {
   try {
-    const list = saved().filter(j => j.id !== id);
-    list.unshift({ id, question, place, at: Date.now() });
-    localStorage.setItem(STORE, JSON.stringify(list.slice(0, 5)));
+    const b = await (await fetch('/demo/budget')).json();
+    document.getElementById('budget').textContent = b.configured
+      ? b.jobsLeft + ' jobs left' : 'dispatch unfunded';
   } catch {}
-  history_();
 }
+budget();
 
-async function history_() {
-  const list = saved();
-  const box = $('#hist');
-  if (!list.length) { box.innerHTML = ''; return; }
-
-  box.innerHTML =
-    '<div class="tag" style="color:var(--faint);margin-top:30px">Your jobs</div>' +
-    list.map(j =>
-      '<div class="card" id="h-' + esc(j.id) + '" style="margin-top:10px">' +
-      '<p class="meta">' + esc(j.place) + ' · ' + new Date(j.at).toLocaleString() + '</p>' +
-      '<p style="margin:6px 0 0">' + esc(j.question) + '</p>' +
-      '<p class="meta" id="hs-' + esc(j.id) + '"><span class="spin"></span> checking…</p></div>'
-    ).join('');
-
-  for (const j of list) {
-    try {
-      const r = await (await fetch('/demo/job/' + j.id)).json();
-      const el = document.querySelector('#hs-' + CSS.escape(j.id));
-      if (!el) continue;
-      if (r.status === 'answered') {
-        el.parentElement.className = 'card hit';
-        el.innerHTML = '<strong style="color:var(--fg);font-size:17px">' + esc(r.answer) + '</strong><br>' +
-          esc(r.verifier || 'a verifier') + ' walked there' +
-          (r.metresFromPlace != null ? ' · ' + r.metresFromPlace + 'm from the pin' : '') +
-          ' · <a href="' + esc(r.proof) + '" target="_blank" rel="noopener">proof →</a>' +
-          (r.evidence || []).map(u => '<img src="' + esc(u) + '" alt="evidence">').join('');
-      } else if (r.status === 'in_progress') {
-        el.innerHTML = '<span class="spin"></span> ' + esc(r.verifier || 'somebody') + ' took it and is walking there…';
-      } else {
-        el.innerHTML = 'waiting for somebody to take it';
-      }
-    } catch {}
-  }
-}
-
-history_();
-
-/**
- * The escrow, said as something openable.
- *
- * A judge should not have to take "funded on Base" on our word when the
- * transaction is a link, and the amount in USDC is the part that shows the
- * money is real rather than an entry in our database.
- */
-function chainLine(chain) {
-  if (!chain) return '';
-  if (chain.funded) {
-    return '<p class="meta">' +
-      '🔒 ' + chain.usdc + ' USDC locked in escrow on Base · ' +
-      '<a href="https://basescan.org/tx/' + esc(chain.txHash) + '" target="_blank" rel="noopener">' +
-      esc(chain.txHash.slice(0, 18)) + '…</a></p>';
-  }
-  if (chain.why === 'self_fund') return '<p class="meta">awaiting your own funding</p>';
-  return '<p class="meta">not funded on chain — ' + esc(chain.why || 'unknown') + '</p>';
-}
-
-function watch(id) {
-  polling = setInterval(async () => {
-    try {
-      const j = await (await fetch('/demo/job/' + id)).json();
-      const card = document.querySelector('#job');
-      if (!card) return;
-      if (j.status === 'in_progress') {
-        card.querySelector('.meta').innerHTML =
-          '<span class="spin"></span> ' + esc(j.verifier || 'somebody') + ' took it and is walking there…';
-      }
-      if (j.status === 'answered') {
-        clearInterval(polling); polling = null;
-        card.className = 'card hit';
-        card.innerHTML =
-          '<div class="tag hit">Answered by a human</div>' +
-          '<p class="answer">' + esc(j.answer) + '</p>' +
-          '<p class="meta">' + esc(j.verifier || 'a verifier') + ' walked there' +
-          (j.metresFromPlace != null ? ' · ' + j.metresFromPlace + 'm from the pin' : '') +
-          (j.capturedAt ? ' · ' + new Date(j.capturedAt).toUTCString() : '') + '</p>' +
-          (j.evidence || []).map(u => '<img src="' + esc(u) + '" alt="evidence">').join('') +
-          '<p class="meta"><a href="' + esc(j.proof) + '" target="_blank" rel="noopener">' +
-          'verify this on Base — hashes, escrow and every transaction →</a></p>';
-      }
-    } catch {}
-  }, 5000);
-}
+/** Clicking anywhere puts you back on the prompt, the way a terminal does. */
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('a') && !e.target.closest('button')) box.focus();
+});
 </script>
 </body>
 </html>`;

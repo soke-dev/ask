@@ -183,6 +183,16 @@ export const config = {
   rates: {
     url: process.env.FX_RATE_URL ?? 'https://open.er-api.com/v6/latest/USD',
     cacheMs: num('FX_CACHE_MS', 60 * 60 * 1000),
+    /**
+     * Used only when the live rate cannot be had at all.
+     *
+     * Refusing to price a job sounds cautious and is not: it leaves the job on
+     * the board with no escrow behind it, so somebody can see it and walk for
+     * money that was never locked. A rate a few percent stale is a far smaller
+     * error than that, and the one actually used is recorded on the row either
+     * way.
+     */
+    fallbackNgnPerUsd: num('FX_FALLBACK_NGN_PER_USD', 1550),
   },
 
   /**
