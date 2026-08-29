@@ -70,8 +70,16 @@ export const config = {
      */
     demoKey: process.env.AGENT_DEMO_KEY ?? '',
     demoBudgetKobo: num('AGENT_DEMO_BUDGET_KOBO', 500_000),
-    /** ₦150 — the app's own MIN_BOUNTY. A demo should not pay above the floor. */
-    demoBountyKobo: num('AGENT_DEMO_BOUNTY_KOBO', 15_000),
+    /**
+     * ₦150 a job, and never more.
+     *
+     * The app's own MIN_BOUNTY, and a hard ceiling rather than a default: this
+     * is spent by anybody who opens a public page, so the only safe amount is
+     * the smallest one that still buys a real trip. A configuration mistake
+     * should not be able to raise it, so the environment can lower this and
+     * cannot lift it.
+     */
+    demoBountyKobo: Math.min(num('AGENT_DEMO_BOUNTY_KOBO', 15_000), 15_000),
   },
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 
