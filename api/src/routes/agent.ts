@@ -17,6 +17,39 @@ export const agentRouter: Router = Router();
 const MIN_BOUNTY_NGN = 150;
 
 /**
+ * What the house will pay for, and how often.
+ *
+ * Anybody with a wallet can mint a key, so these jobs are strangers spending
+ * our USDC. ₦300 is twice the floor — enough for a harder errand, nowhere near
+ * enough to be worth farming — and five a day is enough to build against and
+ * try properly.
+ *
+ * None of it applies to an agent funding its own job. That is their money, and
+ * the only reason to limit somebody spending their own money would be to make
+ * ours look generous by comparison.
+ */
+const MAX_HOUSE_BOUNTY_NGN = 300;
+const HOUSE_JOBS_PER_DAY = 5;
+
+/**
+ * Counts one house-funded job and says whether it was allowed, in one
+ * statement — two requests arriving together would otherwise both read the
+ * same count and both be allowed, which is the cheapest way to make a limit
+ * not a limit.
+ */
+async function claimHouseJob(userId: string): Promise<boolean> {
+  const row = await one<{ allowed: boolean }>(
+    `INSERT INTO ai_usage (user_id, day, kind, used)
+     VALUES ($1, CURRENT_DATE, 'agent_job', 1)
+     ON CONFLICT (user_id, day, kind)
+       DO UPDATE SET used = ai_usage.used + 1
+     RETURNING (used <= $2) AS allowed`,
+    [userId, HOUSE_JOBS_PER_DAY],
+  );
+  return row?.allowed ?? false;
+}
+
+/**
  * The door programs come through.
  *
  * Everything here resolves to the same questions, the same board and the same
@@ -377,6 +410,8 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
     lng?: unknown;
     bountyNgn?: unknown;
     deadlineMinutes?: unknown;
+    /** True when the caller will fund the escrow from their own wallet. */
+    selfFund?: unknown;
   };
 
   const question = String(body.question ?? '').trim();
@@ -401,8 +436,28 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
    */
   const bounty = Number(body.bountyNgn ?? MIN_BOUNTY_NGN);
   const deadlineMinutes = Number(body.deadlineMinutes ?? 60);
-  if (!Number.isFinite(bounty) || bounty <= 0) {
-    res.status(400).json({ error: 'bad_bounty' });
+  if (!Number.isFinite(bounty) || bounty < MIN_BOUNTY_NGN) {
+    res.status(400).json({
+      error: 'bad_bounty',
+      detail: `A job pays at least ₦${MIN_BOUNTY_NGN}.`,
+    });
+    return;
+  }
+
+  /**
+   * Who is paying for this one.
+   *
+   * `selfFund` means the caller signs the escrow authorisation from their own
+   * wallet, so nothing here is spending ours and none of the house limits
+   * apply. Otherwise we pay, and the limits do.
+   */
+  const selfFund = body.selfFund === true;
+
+  if (!selfFund && bounty > MAX_HOUSE_BOUNTY_NGN) {
+    res.status(400).json({
+      error: 'over_house_limit',
+      detail: `We fund up to ₦${MAX_HOUSE_BOUNTY_NGN} a job. Pass selfFund:true and sign the escrow yourself to pay more.`,
+    });
     return;
   }
 
@@ -434,6 +489,23 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
       evidenceKind: prior.evidenceKind,
       evidence: prior.evidenceKeys.map((k) => storage.urlFor(k)),
       questionId: prior.questionId,
+    });
+    return;
+  }
+
+  /**
+   * Counted before the job exists, not after.
+   *
+   * Charging the allowance on success would let a failing dispatch be retried
+   * without limit, which is the loop the limit exists to bound. Only
+   * house-funded jobs count: an agent paying for its own is not spending an
+   * allowance we granted.
+   */
+  if (!selfFund && !(await claimHouseJob(req.user!.id))) {
+    res.status(429).json({
+      error: 'daily_limit',
+      detail: `We fund ${HOUSE_JOBS_PER_DAY} jobs a key a day. Pass selfFund:true and sign the escrow yourself for more.`,
+      because: verdict.because,
     });
     return;
   }
@@ -494,10 +566,21 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
     return q.rows[0]!.id;
   });
 
-  // Locked on Base from the agent's own wallet, the same as the demo — an
-  // agent's job and a person's job are the same job by the time a verifier
-  // sees it, and they should be the same on chain too.
-  const funded = await fundAsAgent(created, Math.round(bounty * 100));
+  /**
+   * Locked on Base by whoever is paying.
+   *
+   * House-funded goes straight through from the agent wallet, the same as the
+   * demo — an agent's job and a person's job are the same job by the time a
+   * verifier sees it, and they are the same on chain too.
+   *
+   * Self-funded stops here and hands back the standard escrow flow. Nothing
+   * bespoke: the caller quotes, signs with their own wallet and submits,
+   * exactly as the app does, using the same two endpoints with the same key
+   * they already hold. We do not need their private key and will not have it.
+   */
+  const funded = selfFund
+    ? null
+    : await fundAsAgent(created, Math.round(bounty * 100));
 
   res.status(201).json({
     status: 'dispatched',
@@ -507,9 +590,25 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
     costNgn: bounty,
     deadlineMinutes: Math.round(deadlineMinutes),
     poll: `/agent/ask/${created}`,
-    chain: funded.ok
-      ? { funded: true, txHash: funded.txHash, usdc: funded.usdc, chainId: config.chain.chainId }
-      : { funded: false, why: funded.reason },
+    paidBy: selfFund ? 'you' : 'confam',
+    chain: funded
+      ? funded.ok
+        ? { funded: true, txHash: funded.txHash, usdc: funded.usdc, chainId: config.chain.chainId }
+        : { funded: false, why: funded.reason }
+      : {
+          funded: false,
+          why: 'self_fund',
+          /**
+           * Said in the response, because a job on the board that nobody has
+           * funded is the one state worth acting on quickly — a verifier can
+           * see it and walk before the money is locked.
+           */
+          fund: {
+            quote: `POST /escrow/${created}/fund/quote`,
+            submit: `POST /escrow/${created}/fund`,
+            note: 'Sign the returned typedData with the wallet your key is bound to, then submit the signature.',
+          },
+        },
   });
 
   // The same alert the app's own questions raise, so an agent's job reaches

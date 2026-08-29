@@ -2,7 +2,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { config, hasEscrow } from './config.js';
 import { one, query } from './db.js';
 import { ngnRate } from './rates.js';
-import { fundPayload, jobIdFor, randomSalt, relayFund } from './escrow.js';
+import { fundPayload, jobIdFor, randomSalt, readJob, relayFund } from './escrow.js';
 
 /**
  * The agent's own wallet, and the money that leaves it.
@@ -80,21 +80,12 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
 
   const { typedData } = fundPayload({ jobId, asker, usdc, validBefore, salt });
 
-  try {
-    const account = privateKeyToAccount(key as `0x${string}`);
-    const signature = await account.signTypedData(typedData as never);
+  const account = privateKeyToAccount(key as `0x${string}`);
+  const signature = await account.signTypedData(typedData as never).catch(() => null);
+  if (!signature) return { ok: false, reason: 'could_not_sign' };
 
-    const result = await relayFund({
-      jobId,
-      asker,
-      usdc,
-      deadline,
-      salt,
-      validBefore,
-      signature,
-    });
-
-    await query(
+  const record = async () =>
+    query(
       `UPDATE questions
           SET chain_job_id = $2, fund_salt = $3,
               fund_usdc = COALESCE(fund_usdc, $4),
@@ -103,17 +94,49 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
       [questionId, jobId, salt, usdc, rate.ngnPerUsd],
     );
 
-    return { ok: true, txHash: result.txHash, jobId, usdc };
-  } catch (error) {
-    /**
-     * Logged loudly and reported, never swallowed.
-     *
-     * The commonest cause by far is the wallet having no USDC, and a demo that
-     * silently stopped putting money on chain would look exactly like one that
-     * never did.
-     */
-    const detail = error instanceof Error ? error.message : String(error);
-    console.warn('[agent] could not fund on chain —', detail);
-    return { ok: false, reason: detail.slice(0, 200) };
+  /**
+   * Retried, because the failure that actually happens is the network.
+   *
+   * The first job dispatched in testing came back unfunded on an ECONNRESET
+   * from the RPC — not a rejection, just a dropped connection — and a job on
+   * the board with no escrow behind it is the worst state this can produce:
+   * somebody can see it and walk before the money is locked.
+   *
+   * The same signed authorisation is reused each time rather than a fresh one.
+   * Its nonce is derived from the job, the amount and the salt, so a retry is
+   * the same authorisation arriving again, not a second claim on the wallet.
+   */
+  let lastError = 'unknown';
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const result = await relayFund({ jobId, asker, usdc, deadline, salt, validBefore, signature });
+      await record();
+      return { ok: true, txHash: result.txHash, jobId, usdc };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+
+      /**
+       * A dropped response looks exactly like a failure.
+       *
+       * So before trying again, ask the chain. If the transaction actually
+       * landed, retrying would send a second one that reverts on status —
+       * harmless but wasteful, and it would report a funded job as failed.
+       */
+      const onChain = await readJob(jobId).catch(() => null);
+      if (onChain && onChain.status !== 'none') {
+        await record();
+        return { ok: true, txHash: 'already_funded', jobId, usdc };
+      }
+
+      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 800));
+    }
   }
+
+  /**
+   * Reported, never swallowed. A demo that had quietly stopped putting money
+   * on chain would look exactly like one that never did.
+   */
+  console.warn('[agent] could not fund on chain after 3 tries —', lastError);
+  return { ok: false, reason: lastError.slice(0, 200) };
 }

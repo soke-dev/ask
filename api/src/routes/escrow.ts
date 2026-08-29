@@ -3,6 +3,7 @@ import { combineHashes } from '../evidenceHash.js';
 import { storage } from '../storage.js';
 import { Router } from 'express';
 import { authenticate } from '../auth.js';
+import { authenticateEither } from '../agentAuth.js';
 import { one, query, transaction } from '../db.js';
 import { notify, nearbyVerifiers } from '../push.js';
 import { config, hasEscrow } from '../config.js';
@@ -55,7 +56,7 @@ escrowRouter.get('/status', authenticate, (_req, res) => {
 
 // ─── Funding ────────────────────────────────────────────────────────────────
 
-escrowRouter.post('/:questionId/fund/quote', authenticate, async (req, res) => {
+escrowRouter.post('/:questionId/fund/quote', authenticateEither, async (req, res) => {
   const questionId = questionIdOf(req.params.questionId);
   if (!questionId) {
     res.status(400).json({ error: 'bad_question_id' });
@@ -152,7 +153,7 @@ escrowRouter.post('/:questionId/fund/quote', authenticate, async (req, res) => {
   res.json({ jobId, salt, deadline, validBefore, usdc, typedData });
 });
 
-escrowRouter.post('/:questionId/fund', authenticate, async (req, res) => {
+escrowRouter.post('/:questionId/fund', authenticateEither, async (req, res) => {
   const questionId = questionIdOf(req.params.questionId);
   if (!questionId) {
     res.status(400).json({ error: 'bad_question_id' });

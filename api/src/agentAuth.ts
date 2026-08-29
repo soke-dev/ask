@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { hasAgents } from './config.js';
 import { one, query } from './db.js';
-import type { AuthedUser } from './auth.js';
+import { authenticate, type AuthedUser } from './auth.js';
 
 /**
  * Who the caller is when the caller is a program.
@@ -133,6 +133,27 @@ export async function authenticateAgent(req: Request, res: Response, next: NextF
   void query(`UPDATE api_keys SET last_used_at = now() WHERE id = $1`, [row.id]).catch(() => {});
 
   next();
+}
+
+/**
+ * A person or a program, whichever turned up.
+ *
+ * For the routes both need to reach. Funding an escrow is the clearest case:
+ * the flow is identical whether a phone or an agent signs the authorisation —
+ * same contract, same payload, same wallet-holder consenting — and the only
+ * difference is which credential proved who is asking.
+ *
+ * Tries the API key first, because it is recognisable on sight from its
+ * prefix. Anything else falls through to Privy, so an app request behaves
+ * exactly as it did before this existed.
+ */
+export async function authenticateEither(req: Request, res: Response, next: NextFunction) {
+  const header = req.header('authorization') ?? '';
+  if (header.toLowerCase().startsWith('bearer ') && header.slice(7).trim().startsWith(PREFIX)) {
+    await authenticateAgent(req, res, next);
+    return;
+  }
+  await authenticate(req, res, next);
 }
 
 /** Constant-time compare, for anywhere a key is checked outside the lookup. */
