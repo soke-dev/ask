@@ -1,9 +1,11 @@
 import { keccak256, toHex } from 'viem';
+import { combineHashes } from '../evidenceHash.js';
+import { storage } from '../storage.js';
 import { Router } from 'express';
 import { authenticate } from '../auth.js';
 import { one, query, transaction } from '../db.js';
 import { notify, nearbyVerifiers } from '../push.js';
-import { hasEscrow } from '../config.js';
+import { config, hasEscrow } from '../config.js';
 import { ngnRate } from '../rates.js';
 import {
   claimPayload,
@@ -260,6 +262,97 @@ escrowRouter.post('/:questionId/fund', authenticate, async (req, res) => {
 
 // ─── Claiming ───────────────────────────────────────────────────────────────
 
+/**
+ * The proof, for anybody at all.
+ *
+ * Deliberately unauthenticated. A commitment that can only be checked by
+ * asking us whether it checks out is not a commitment — the value of putting a
+ * hash on Base is that somebody who distrusts this server entirely can fetch
+ * the files, hash them with any Ethereum library, read Claimed() from the
+ * contract, and compare. This endpoint exists to make that possible, not to
+ * perform it on their behalf.
+ *
+ * Public questions only. A private answer stays private, and a proof that
+ * leaked its evidence to anyone holding a question id would be a worse
+ * trade than not offering one.
+ */
+escrowRouter.get('/:questionId/proof', async (req, res) => {
+  const questionId = questionIdOf(req.params.questionId);
+  if (!questionId) {
+    res.status(400).json({ error: 'bad_question_id' });
+    return;
+  }
+
+  const q = await one<{ chainJobId: string | null; body: string; place: string | null }>(
+    `SELECT q.chain_job_id AS "chainJobId", q.body, p.name AS place
+       FROM questions q
+       LEFT JOIN places p ON p.id = q.place_id
+      WHERE q.id = $1 AND q.visibility = 'public'`,
+    [questionId],
+  );
+  if (!q) {
+    res.status(404).json({ error: 'not_found' });
+    return;
+  }
+
+  const files = await query<{
+    hash: string | null;
+    key: string;
+    bytes: string | null;
+    capturedAt: Date | null;
+    lat: number | null;
+    lng: number | null;
+    distance: number | null;
+  }>(
+    `SELECT e.content_hash AS hash, e.storage_key AS key, e.bytes,
+            e.captured_at AS "capturedAt", e.captured_lat AS lat,
+            e.captured_lng AS lng, e.distance_metres AS distance
+       FROM evidence e
+       JOIN tasks t ON t.id = e.task_id
+      WHERE t.question_id = $1
+        AND e.attempt IS NOT DISTINCT FROM
+            (SELECT max(attempt) FROM evidence WHERE task_id = t.id)
+      ORDER BY e.created_at`,
+    [questionId],
+  );
+
+  const hashes = files.map((f) => f.hash).filter((h): h is string => Boolean(h));
+
+  res.json({
+    question: q.body,
+    place: q.place,
+    chain: {
+      jobId: q.chainJobId,
+      escrow: config.chain.escrowAddress || null,
+      chainId: config.chain.chainId,
+      /** What claim() committed. Compare against Claimed(jobId, ...). */
+      evidenceHash: combineHashes(hashes),
+    },
+    evidence: files.map((f) => ({
+      url: storage.urlFor(f.key),
+      keccak256: f.hash,
+      bytes: f.bytes ? Number(f.bytes) : null,
+      capturedAt: f.capturedAt,
+      lat: f.lat,
+      lng: f.lng,
+      metresFromPlace: f.distance,
+    })),
+    /**
+     * Said in the response rather than in documentation somebody has to find,
+     * because the instruction is three lines and the whole claim rests on
+     * anybody being able to follow it.
+     */
+    verify: [
+      'Download each evidence url.',
+      'keccak256 the bytes of each file.',
+      'Sort those hashes as strings, concatenate without 0x, keccak256 the result.',
+      'A single file is its own hash, uncombined.',
+      'Compare with evidenceHash in the Claimed event for this jobId on Base.',
+    ],
+    unverifiable: hashes.length === 0 ? 'This was submitted before evidence was hashed at upload.' : null,
+  });
+});
+
 escrowRouter.post('/:questionId/claim/quote', authenticate, async (req, res) => {
   const questionId = questionIdOf(req.params.questionId);
   if (!questionId) {
@@ -282,10 +375,42 @@ escrowRouter.post('/:questionId/claim/quote', authenticate, async (req, res) => 
     return;
   }
 
-  // Hashing whatever identifies the evidence — the storage key, or the answer
-  // text when there is no file. What matters is that it is fixed before a
-  // dispute, not that it is reversible.
-  const evidenceHash = keccak256(toHex(evidence || questionId));
+  /**
+   * The hash of the evidence itself, taken from what was stored.
+   *
+   * This used to hash whatever string the client sent, and what the app sent
+   * was `shots[0].uri` — a file:// path on one phone. So the chain carried a
+   * commitment to a filename that existed nowhere, and replacing the stored
+   * photograph afterwards would not have changed it. A verifiable claim about
+   * evidence that could not verify the evidence.
+   *
+   * Read from the database rather than accepted from the caller, because a
+   * commitment the committer chooses is not a commitment. The client no longer
+   * has any say in it; the `evidence` field it still sends is used only when
+   * there is nothing stored to hash.
+   */
+  const files = await query<{ hash: string }>(
+    `SELECT content_hash AS hash
+       FROM evidence e
+       JOIN tasks t ON t.id = e.task_id
+      WHERE t.question_id = $1
+        AND e.content_hash IS NOT NULL
+        AND e.attempt IS NOT DISTINCT FROM
+            (SELECT max(attempt) FROM evidence WHERE task_id = t.id)`,
+    [questionId],
+  );
+
+  /**
+   * Falls back only when there is genuinely nothing to hash.
+   *
+   * A ledger-only answer with no file still has to commit to something, and
+   * the question id at least identifies which job was claimed. Rows written
+   * before content_hash existed land here too — they were never committed to
+   * honestly and cannot be repaired, since the old value hashed something
+   * else entirely.
+   */
+  const evidenceHash =
+    combineHashes(files.map((f) => f.hash)) ?? keccak256(toHex(evidence || questionId));
 
   res.json({
     jobId: q.chainJobId,

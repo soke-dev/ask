@@ -5,6 +5,7 @@ import { config, hasDatabase } from '../config.js';
 import { query, transaction } from '../db.js';
 import { runGate } from '../checks/run.js';
 import { storage } from '../storage.js';
+import { hashFile } from '../evidenceHash.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -106,8 +107,17 @@ evidenceRouter.post('/check', upload.array('files', config.media.maxPhotos), asy
   }
 
   const stored = await transaction(async (client) => {
+    /**
+      * Stored and hashed together, so the two cannot drift apart.
+      *
+      * Pairing them by index across two separate arrays would work until
+      * somebody filtered one of them.
+      */
     const saved = await Promise.all(
-      files.map((f) => storage.put(f.buffer, f.mimetype)),
+      files.map(async (f) => ({
+        ...(await storage.put(f.buffer, f.mimetype)),
+        hash: hashFile(f.buffer),
+      })),
     );
 
     const evidenceRows = await Promise.all(
@@ -115,8 +125,9 @@ evidenceRouter.post('/check', upload.array('files', config.media.maxPhotos), asy
         client.query<{ id: string }>(
           `INSERT INTO evidence
              (task_id, attempt, kind, storage_key, mime, bytes, width, height,
-              duration_seconds, captured_lat, captured_lng, distance_metres, captured_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+              duration_seconds, captured_lat, captured_lng, distance_metres,
+              content_hash, captured_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
            RETURNING id`,
           [
             body.taskId,
@@ -133,6 +144,15 @@ evidenceRouter.post('/check', upload.array('files', config.media.maxPhotos), asy
             captured?.lat ?? null,
             captured?.lng ?? null,
             report.facts.distanceMetres,
+            /**
+             * The hash of the bytes that arrived.
+             *
+             * Taken at upload rather than read back from storage and hashed
+             * later — what is being committed to is what the verifier sent,
+             * and anything that happens to it in between is precisely what the
+             * commitment exists to expose.
+             */
+            file.hash,
           ],
         ),
       ),
