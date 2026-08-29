@@ -381,10 +381,48 @@ async function jobs() {
       } else if (r.status === 'in_progress') {
         line.className = 'ln go';
         line.innerHTML = G + head + esc(r.verifier || 'somebody') + ' is walking there';
+      } else if (r.refundable) {
+        /*
+         * Nobody took it and the clock ran out, so the USDC is still sitting
+         * in the contract. Offered rather than swept quietly: it is the
+         * visitor's job, and watching the money come back is the clearest
+         * demonstration that it was ever really there.
+         */
+        line.className = 'ln warn';
+        line.innerHTML = G + head + 'expired, nobody took it' +
+          '<button class="copy" data-refund="' + esc(j.id) + '">refund</button>';
+        const btn = line.querySelector('[data-refund]');
+        btn.onclick = () => refund(j.id, line, head);
+      } else if (r.refundTx) {
+        line.className = 'ln dim';
+        line.innerHTML = G + head + 'expired and refunded · ' +
+          '<a href="https://basescan.org/tx/' + esc(r.refundTx) + '" target="_blank" rel="noopener">tx</a>';
       } else {
         line.innerHTML = G + head + 'waiting for somebody to take it';
       }
     } catch {}
+  }
+}
+
+/** Asks the contract for an expired job's money back. */
+async function refund(id, line, head) {
+  line.className = 'ln dim';
+  line.innerHTML = G + head + 'asking the contract for it back...';
+  try {
+    const r = await (await fetch('/demo/job/' + id + '/refund', { method: 'POST' })).json();
+    if (r.ok) {
+      line.className = 'ln ok';
+      line.innerHTML = G + head + 'refunded' +
+        (r.txHash ? ' · <a href="https://basescan.org/tx/' + esc(r.txHash) +
+        '" target="_blank" rel="noopener">' + esc(String(r.txHash).slice(0, 20)) + '...</a>' : '');
+      budget();
+    } else {
+      line.className = 'ln warn';
+      line.innerHTML = G + head + 'could not refund — ' + esc(r.detail || r.error);
+    }
+  } catch (e) {
+    line.className = 'ln warn';
+    line.innerHTML = G + head + 'could not refund — ' + esc(e.message || e);
   }
 }
 

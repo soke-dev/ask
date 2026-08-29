@@ -8,6 +8,7 @@ import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 import { notify, nearbyVerifiers } from '../push.js';
 import { DEMO_PAGE } from '../demoPage.js';
 import { fundAsAgent } from '../agentWallet.js';
+import { relayRefund } from '../escrow.js';
 
 export const demoRouter: Router = Router();
 
@@ -284,6 +285,79 @@ demoRouter.post('/ask', async (req, res) => {
 });
 
 /**
+ * Takes an expired job's money back out of the escrow.
+ *
+ * A job nobody took holds real USDC until somebody asks for it back, and the
+ * contract lets anybody do that once the deadline passes — the money can only
+ * go to the asker, so there is nothing to protect against. Offering it here
+ * means a visitor who watched their job time out can undo it themselves rather
+ * than leaving it stranded, which is how a demo budget quietly runs out while
+ * the balance sits in a contract.
+ *
+ * Unauthenticated, and only ever for jobs this page created. Refused while the
+ * deadline stands or once a verifier has taken it: somebody may be walking.
+ */
+demoRouter.post('/job/:id/refund', async (req, res) => {
+  const job = await one<{
+    chainJobId: string | null;
+    refundTx: string | null;
+    expired: boolean;
+    taken: boolean;
+  }>(
+    `SELECT q.chain_job_id AS "chainJobId", q.refund_tx AS "refundTx",
+            (q.dispatched_at + (q.deadline_minutes || ' minutes')::interval) < now() AS expired,
+            EXISTS (SELECT 1 FROM tasks t WHERE t.question_id = q.id) AS taken
+       FROM questions q
+       JOIN api_keys k ON k.id = q.asked_by_key AND k.name = 'demo'
+      WHERE q.id = $1`,
+    [req.params.id],
+  );
+
+  if (!job) {
+    res.status(404).json({ error: 'not_found' });
+    return;
+  }
+  if (job.refundTx) {
+    res.json({ ok: true, already: true, txHash: job.refundTx });
+    return;
+  }
+  if (!job.chainJobId) {
+    res.status(409).json({ error: 'not_on_chain', detail: 'Nothing was locked for this job.' });
+    return;
+  }
+  if (job.taken) {
+    res.status(409).json({ error: 'taken', detail: 'Somebody took this job. The money is theirs to claim.' });
+    return;
+  }
+  if (!job.expired) {
+    res.status(409).json({ error: 'not_expired', detail: 'The clock is still running on this one.' });
+    return;
+  }
+
+  try {
+    const result = await relayRefund(job.chainJobId as `0x${string}`);
+    await query(
+      `UPDATE questions SET refund_tx = $2, closed_at = COALESCE(closed_at, now()) WHERE id = $1`,
+      [req.params.id, result.txHash],
+    );
+    res.json({ ok: true, txHash: result.txHash });
+  } catch (error) {
+    /**
+     * The contract has the last word on when a deadline passed.
+     *
+     * Its deadline is set at funding time and ours is derived from
+     * dispatched_at, so the two can disagree — by seconds normally, by more if
+     * a row was ever touched. Reporting the contract's refusal verbatim is
+     * better than translating it into our own version of the truth, since the
+     * contract is the one holding the money.
+     */
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn('[demo] refund failed —', detail);
+    res.status(502).json({ error: 'refund_failed', detail: detail.slice(0, 160) });
+  }
+});
+
+/**
  * Whether anybody has been yet.
  *
  * Unauthenticated, and only ever about jobs this page created — a visitor
@@ -301,11 +375,15 @@ demoRouter.get('/job/:id', async (req, res) => {
     distanceMetres: number | null;
     capturedAt: Date | null;
     verifier: string | null;
+    expired: boolean;
+    refundTx: string | null;
   }>(
     `SELECT q.body AS question, p.name AS place, t.status::text AS status,
             a.body AS answer, e.keys AS "evidenceKeys", e.kind::text AS "evidenceKind",
             e.distance_metres AS "distanceMetres", e.captured_at AS "capturedAt",
-            v.username AS verifier
+            v.username AS verifier,
+            (q.dispatched_at + (q.deadline_minutes || ' minutes')::interval) < now() AS expired,
+            q.refund_tx AS "refundTx"
        FROM questions q
        JOIN api_keys k      ON k.id = q.asked_by_key AND k.name = 'demo'
        LEFT JOIN places p   ON p.id = q.place_id
@@ -336,5 +414,11 @@ demoRouter.get('/job/:id', async (req, res) => {
     capturedAt: row.capturedAt,
     verifier: row.verifier,
     proof: `/escrow/${req.params.id}/proof`,
+    /**
+     * Whether the money can be taken back, said here rather than left for the
+     * page to work out from a deadline it was never sent.
+     */
+    refundable: !done && row.status === null && row.expired && !row.refundTx,
+    refundTx: row.refundTx,
   });
 });
