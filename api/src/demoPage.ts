@@ -165,7 +165,8 @@ function render(d) {
       '<p class="meta">asked as “' + esc(d.askedAs) + '” · ' + d.ageMinutes + ' min ago' +
       (d.verifier ? ' · ' + esc(d.verifier) : '') + '</p>' +
       (d.evidence || []).map(u => '<img src="' + esc(u) + '" alt="evidence">').join('') +
-      '<p class="meta"><a href="/escrow/' + esc(d.questionId) + '/proof">verify this on Base →</a></p>' +
+      '<p class="meta"><a href="/escrow/' + esc(d.questionId) + '/proof" target="_blank" rel="noopener">' +
+      'verify this on Base — hashes, escrow and every transaction →</a></p>' +
       '</div>';
     return;
   }
@@ -174,6 +175,7 @@ function render(d) {
     out.innerHTML =
       '<div class="card go" id="job"><div class="tag go">Somebody has to go · ₦' + d.costNgn + '</div>' +
       '<p class="why">' + esc(d.because) + '</p>' +
+      chainLine(d.chain) +
       '<p class="meta"><span class="spin"></span> waiting for a verifier to take it…</p>' +
       '<p class="meta">' + d.jobsLeft + ' demo jobs left</p></div>';
     watch(d.id);
@@ -237,6 +239,25 @@ $('#key').onclick = async () => {
   }
 };
 
+/**
+ * The escrow, said as something openable.
+ *
+ * A judge should not have to take "funded on Base" on our word when the
+ * transaction is a link, and the amount in USDC is the part that shows the
+ * money is real rather than an entry in our database.
+ */
+function chainLine(chain) {
+  if (!chain) return '';
+  if (chain.funded) {
+    return '<p class="meta">' +
+      '🔒 ' + chain.usdc + ' USDC locked in escrow on Base · ' +
+      '<a href="https://basescan.org/tx/' + esc(chain.txHash) + '" target="_blank" rel="noopener">' +
+      esc(chain.txHash.slice(0, 18)) + '…</a></p>';
+  }
+  if (chain.why === 'self_fund') return '<p class="meta">awaiting your own funding</p>';
+  return '<p class="meta">not funded on chain — ' + esc(chain.why || 'unknown') + '</p>';
+}
+
 function watch(id) {
   polling = setInterval(async () => {
     try {
@@ -257,7 +278,8 @@ function watch(id) {
           (j.metresFromPlace != null ? ' · ' + j.metresFromPlace + 'm from the pin' : '') +
           (j.capturedAt ? ' · ' + new Date(j.capturedAt).toUTCString() : '') + '</p>' +
           (j.evidence || []).map(u => '<img src="' + esc(u) + '" alt="evidence">').join('') +
-          '<p class="meta"><a href="' + esc(j.proof) + '">verify this on Base →</a></p>';
+          '<p class="meta"><a href="' + esc(j.proof) + '" target="_blank" rel="noopener">' +
+          'verify this on Base — hashes, escrow and every transaction →</a></p>';
       }
     } catch {}
   }, 5000);

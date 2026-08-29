@@ -84,14 +84,22 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
   const signature = await account.signTypedData(typedData as never).catch(() => null);
   if (!signature) return { ok: false, reason: 'could_not_sign' };
 
-  const record = async () =>
+  /**
+   * `fund_tx` included, the same as the app's own funding route stores.
+   *
+   * It was left out here, so an agent-funded job was on chain and had nothing
+   * pointing at the transaction that put it there — which is exactly the thing
+   * somebody checking the claim wants to open.
+   */
+  const record = async (txHash: string | null) =>
     query(
       `UPDATE questions
           SET chain_job_id = $2, fund_salt = $3,
               fund_usdc = COALESCE(fund_usdc, $4),
-              fund_rate = COALESCE(fund_rate, $5)
+              fund_rate = COALESCE(fund_rate, $5),
+              fund_tx  = COALESCE(fund_tx, $6)
         WHERE id = $1`,
-      [questionId, jobId, salt, usdc, rate.ngnPerUsd],
+      [questionId, jobId, salt, usdc, rate.ngnPerUsd, txHash],
     );
 
   /**
@@ -111,7 +119,7 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const result = await relayFund({ jobId, asker, usdc, deadline, salt, validBefore, signature });
-      await record();
+      await record(result.txHash);
       return { ok: true, txHash: result.txHash, jobId, usdc };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
@@ -125,7 +133,7 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
        */
       const onChain = await readJob(jobId).catch(() => null);
       if (onChain && onChain.status !== 'none') {
-        await record();
+        await record(null);
         return { ok: true, txHash: 'already_funded', jobId, usdc };
       }
 

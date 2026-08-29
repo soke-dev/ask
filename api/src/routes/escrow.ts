@@ -277,6 +277,17 @@ escrowRouter.post('/:questionId/fund', authenticateEither, async (req, res) => {
  * leaked its evidence to anyone holding a question id would be a worse
  * trade than not offering one.
  */
+/**
+ * A transaction hash and where to read it.
+ *
+ * Base has one canonical explorer and nobody checking a claim should have to
+ * know its address — the point of publishing a hash is that it can be opened.
+ */
+function link(tx: string | null): { hash: string; url: string } | null {
+  if (!tx) return null;
+  return { hash: tx, url: `https://basescan.org/tx/${tx}` };
+}
+
 escrowRouter.get('/:questionId/proof', async (req, res) => {
   const questionId = questionIdOf(req.params.questionId);
   if (!questionId) {
@@ -284,10 +295,21 @@ escrowRouter.get('/:questionId/proof', async (req, res) => {
     return;
   }
 
-  const q = await one<{ chainJobId: string | null; body: string; place: string | null }>(
-    `SELECT q.chain_job_id AS "chainJobId", q.body, p.name AS place
+  const q = await one<{
+    chainJobId: string | null;
+    body: string;
+    place: string | null;
+    fundTx: string | null;
+    releaseTx: string | null;
+    refundTx: string | null;
+    claimTx: string | null;
+  }>(
+    `SELECT q.chain_job_id AS "chainJobId", q.body, p.name AS place,
+            q.fund_tx AS "fundTx", q.release_tx AS "releaseTx",
+            q.refund_tx AS "refundTx", t.claim_tx AS "claimTx"
        FROM questions q
        LEFT JOIN places p ON p.id = q.place_id
+       LEFT JOIN tasks t  ON t.question_id = q.id
       WHERE q.id = $1 AND q.visibility = 'public'`,
     [questionId],
   );
@@ -328,6 +350,17 @@ escrowRouter.get('/:questionId/proof', async (req, res) => {
       chainId: config.chain.chainId,
       /** What claim() committed. Compare against Claimed(jobId, ...). */
       evidenceHash: combineHashes(hashes),
+      /**
+       * The transactions themselves, so this can be opened rather than taken
+       * on trust. Each is a link somebody can paste into a block explorer and
+       * read without any part of this server in the way.
+       */
+      transactions: {
+        funded: link(q.fundTx),
+        claimed: link(q.claimTx),
+        released: link(q.releaseTx),
+        refunded: link(q.refundTx),
+      },
     },
     evidence: files.map((f) => ({
       url: storage.urlFor(f.key),
