@@ -16,8 +16,8 @@ const STEPS = [
   },
   {
     n: '02',
-    title: 'AI answers if it can',
-    body: 'If somebody already checked that place recently and shared it, you get it straight away and free.',
+    title: 'Confam AI checks what is known',
+    body: 'It reads what somebody already verified about that place and how old it is, and decides whether that still answers you. If it does, you get it straight away with the photograph, and you can tip whoever took it.',
   },
   {
     n: '03',
@@ -27,7 +27,7 @@ const STEPS = [
   {
     n: '04',
     title: 'You decide',
-    body: 'Photo or video comes back. Confirm it and they are paid. Query it and support reviews it first.',
+    body: 'Photo or video comes back with the time and how far from the place it was taken. Confirm it and they are paid. Query it and a reviewer rules before any money moves.',
   },
 ];
 
@@ -45,7 +45,9 @@ const LEGAL: { title: string; body: string[] }[] = [
     body: [
       'Confam connects people who want something checked with people already nearby who will go and check it.',
       'We are not the one going. Verifiers are independent. They choose which jobs to take, and they are responsible for how they behave while doing them.',
-      `When you pay for a question the amount is held, not sent. It reaches the verifier only when you confirm their evidence, and we keep ${FEE_PERCENT}. If nobody delivers inside the window you set, you take the whole amount back.`,
+      `When you pay for a question the amount is held, not sent. It is locked in a contract on the Base network in USDC, and it reaches the verifier only when you confirm their evidence, less our ${FEE_PERCENT}. If nobody delivers inside the window you set, you take the whole amount back.`,
+      'A queried answer freezes the money until a reviewer rules. Neither side can move it in the meantime, including us: the contract only accepts a ruling from one account, and that ruling is what pays out or refunds.',
+      'Programs can ask questions too, with a key. A job an agent posted reaches the same board and pays the same person; if the agent never comes back to accept an answer, it is accepted for them after fifteen minutes so nobody who walked somewhere is left waiting.',
       'Answers describe one moment at one place. Things change. We do not promise an answer is still true later, and you should not lean on one for a decision that matters without checking it again.',
       'Using the app for surveillance, for scouting a target, for harassment, or to ask anyone to break the law ends the account immediately.',
     ],
@@ -59,6 +61,10 @@ const LEGAL: { title: string; body: string[] }[] = [
       'Other people see your first name, whether your identity is confirmed, and how many jobs you have finished. Never your email, your surname or your phone number.',
       'Answers you mark as shared are shown to other people asking about the same place. Answers you keep private are not, ever.',
       'Place searches are sent to whichever geocoding provider the app is configured with, so they can be resolved.',
+      'Evidence you submit is sent to OpenAI, with the question, to judge whether it shows what was asked. It is not used to train anything, and a model never rejects your work on its own.',
+      'When a job is claimed, a keccak256 hash of your evidence file is written to the Base network and signed by your wallet, so anybody can check the evidence was not swapped afterwards. The file itself is never put on chain. The hash, your wallet address and the amounts are public and permanent, and cannot be deleted by us or by you.',
+      'Your wallet address is on a public blockchain by its nature. Anything paid to it can be seen by anyone who knows it.',
+      'If you allow notifications we keep a device token so we can reach you. Turning them off in your phone retires it.',
     ],
   },
   {
@@ -70,6 +76,7 @@ const LEGAL: { title: string; body: string[] }[] = [
       'React Navigation · MIT',
       'react-native-svg and react-native-qrcode-svg · MIT',
       'Ionicons · MIT',
+      'viem, for talking to Base · MIT',
       'Barlow, by Jeremy Tribby · SIL Open Font Licence 1.1',
       'IBM Plex Mono, by IBM · SIL Open Font Licence 1.1',
       'Place data comes from OpenStreetMap contributors under the ODbL, unless a commercial provider is configured.',

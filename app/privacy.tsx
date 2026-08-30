@@ -18,7 +18,17 @@ const FACTS: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string
   {
     icon: 'location-outline',
     title: 'Location is read when you take a job',
-    body: 'Not in the background, and not while you are only browsing. It is used to show the asker that someone genuinely reached the place.',
+    body: 'And again when you photograph it, so the asker can see how close you were. Not in the background, and not while you are only browsing.',
+  },
+  {
+    icon: 'sparkles-outline',
+    title: 'Evidence is checked by a model first',
+    body: 'Your photo or video is sent to OpenAI to judge whether it shows what was asked, along with the question itself. It is not used to train anything, and a machine never rejects your work on its own.',
+  },
+  {
+    icon: 'link-outline',
+    title: 'A fingerprint of your evidence goes on chain',
+    body: 'When you claim a job, a keccak256 hash of the file is written to Base and signed by your wallet. It proves the evidence was not swapped afterwards. The photo itself never goes on chain, but the hash is public and permanent.',
   },
   {
     icon: 'card-outline',
