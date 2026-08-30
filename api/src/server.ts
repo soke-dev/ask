@@ -118,8 +118,15 @@ app.use('/withdraw', withdrawRouter);
 app.use('/questions', questionsRouter);
 // Programs, not phones. The router 404s wholesale when AGENTS_ENABLED is off.
 app.use('/agent', agentRouter);
-// The one surface reachable with no credential at all. Spends from a capped
-// budget, because a job posted from a public page is a real job.
+/**
+ * The one surface reachable with no credential at all. Spends from a capped
+ * budget, because a job posted from a public page is a real job.
+ *
+ * Mounted twice on purpose. /confamagent is the name; /demo is where it has
+ * been linked from since it existed, including from inside a shipped app, and
+ * breaking those links to rename a route would be a poor trade.
+ */
+app.use('/confamagent', demoRouter);
 app.use('/demo', demoRouter);
 app.use('/escrow', escrowRouter);
 app.use('/evidence', evidenceRouter);

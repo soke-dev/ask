@@ -25,7 +25,7 @@ export const DEMO_PAGE = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>confam — ask the physical world</title>
+<title>confamai — the physical world, on demand</title>
 <link rel="icon" href="${LOGO_DATA_URI}">
 <style>
   :root {
@@ -302,7 +302,7 @@ const ASKS = [
 ];
 
 let PLACES = ['Etete Road', 'Oredo', 'Ikeja', 'Surulere'];
-fetch('/demo/places')
+fetch('/confamagent/places')
   .then(r => r.json())
   .then(d => { if (d.places && d.places.length) PLACES = d.places; })
   .catch(() => {});
@@ -338,7 +338,7 @@ async function searchPlaces() {
   const q = box.value.trim();
   if (step !== 'place' || q.length < 2) return;
   try {
-    const r = await (await fetch('/demo/search?q=' + encodeURIComponent(q))).json();
+    const r = await (await fetch('/confamagent/search?q=' + encodeURIComponent(q))).json();
     if (step !== 'place' || box.value.trim() !== q) return;   // moved on since
     if (!r.places || !r.places.length) return;
     renderSuggestions(r.places.slice(0, 6));
@@ -493,7 +493,7 @@ async function ask(question, place, confirm, at, area) {
   lastArea = area || lastArea;
   const thinking = say(G + (confirm ? 'locking the bounty on Base...' : 'checking what the network already knows...'), 'dim');
   try {
-    const r = await fetch('/demo/ask', {
+    const r = await fetch('/confamagent/ask', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         question, place, confirm: confirm === true,
@@ -567,7 +567,7 @@ function watch(id, line) {
   watching.add(id);
   const timer = setInterval(async () => {
     try {
-      const j = await (await fetch('/demo/job/' + id)).json();
+      const j = await (await fetch('/confamagent/job/' + id)).json();
       if (j.status === 'in_progress') {
         line.className = 'ln go';
         line.innerHTML = G + esc(j.verifier || 'somebody') + ' took it and is walking there...';
@@ -619,7 +619,7 @@ async function jobs() {
     const head = '[' + (n + 1) + '] ' + esc(j.question) + ' @ ' + esc(j.place) + ' — ';
     const line = say(G + head + 'checking...', 'dim');
     try {
-      const r = await (await fetch('/demo/job/' + j.id)).json();
+      const r = await (await fetch('/confamagent/job/' + j.id)).json();
       if (r.status === 'answered') {
         line.className = 'ln ok';
         line.innerHTML = G + head + esc(r.answer) +
@@ -746,7 +746,7 @@ async function refund(id, line, head) {
   line.className = 'ln dim';
   line.innerHTML = G + head + 'asking the contract for it back...';
   try {
-    const r = await (await fetch('/demo/job/' + id + '/refund', { method: 'POST' })).json();
+    const r = await (await fetch('/confamagent/job/' + id + '/refund', { method: 'POST' })).json();
     if (r.ok) {
       line.className = 'ln ok';
       line.innerHTML = G + head + 'refunded' +
@@ -830,7 +830,7 @@ async function getKey() {
  */
 async function feed() {
   try {
-    const r = await (await fetch('/demo/answered')).json();
+    const r = await (await fetch('/confamagent/answered')).json();
     const box = document.getElementById('feed');
     if (!box) return;
     if (!r.answered || !r.answered.length) {
@@ -851,7 +851,7 @@ feed();
 setInterval(feed, 60_000);
 
 async function budget() {
-  try { await (await fetch('/demo/budget')).json(); } catch {}
+  try { await (await fetch('/confamagent/budget')).json(); } catch {}
 }
 budget();
 

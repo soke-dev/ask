@@ -174,7 +174,7 @@ agentRouter.get('/', (req, res) => {
       selfFunded: 'no limit — it is your money',
     },
 
-    humanDemo: `${base}/demo`,
+    terminal: `${base}/confamagent`,
   });
 });
 

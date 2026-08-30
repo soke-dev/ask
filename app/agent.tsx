@@ -239,7 +239,7 @@ export default function AgentScreen() {
         </Text>
 
         <Pressable
-          onPress={() => void Linking.openURL(`${API_BASE}/demo`)}
+          onPress={() => void Linking.openURL(`${API_BASE}/confamagent`)}
           disabled={!hasApi}
           style={({ pressed }) => [
             styles.wideBtn,
@@ -251,7 +251,7 @@ export default function AgentScreen() {
           ]}
         >
           <Text style={[text.action, { color: colors.primaryForeground }]}>
-            Open the agent terminal
+            Open Confam Agent
           </Text>
         </Pressable>
 
