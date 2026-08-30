@@ -57,7 +57,7 @@ const LEGAL: { title: string; body: string[] }[] = [
     body: [
       'We hold your email, the name and username you choose, a profile picture if you add one, the area you set, and the questions and jobs you take part in.',
       'Your location is read when you accept a job and when you capture evidence. Not in the background, and not while you are only browsing.',
-      'Your ID number is stored when you submit it, and only the review team can read it. It is used to confirm you are a real person, to keep duplicate and throwaway accounts off the board, and to open jobs that ask for a confirmed identity. It is never shown to another user.',
+      'Your ID number is retained after submission and used solely for identity verification: confirming you are a real person, preventing duplicate and fraudulent accounts, and enabling access to jobs that require a verified identity. Access is restricted to the review team, and it is never disclosed to other users.',
       'Other people see your username, whether your identity is confirmed, and how many jobs you have finished. Never your email, your real name or your phone number.',
       'Answers you mark as shared are shown to other people asking about the same place. Answers you keep private are not, ever.',
       'Place searches are sent to whichever geocoding provider the app is configured with, so they can be resolved.',

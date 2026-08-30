@@ -32,8 +32,8 @@ const FACTS: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string
   },
   {
     icon: 'card-outline',
-    title: 'Your ID is saved, and only we see it',
-    body: 'It is kept so we can confirm you are a real person, keep duplicate and throwaway accounts off the board, and open the higher-paying jobs that ask for a confirmed identity. Only the review team can read it. It is never shown to another user, and never on a job.',
+    title: 'Your ID is held for verification only',
+    body: 'It is stored to confirm you are a real person, to prevent duplicate and fraudulent accounts, and to unlock jobs that require a verified identity. Access is limited to the review team. It is never shown to other users and never attached to a job.',
   },
   {
     icon: 'camera-outline',
