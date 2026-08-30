@@ -1,7 +1,9 @@
 import React, { useRef, useState } from 'react';
 import {
   Animated,
+  Modal,
   Platform,
+  ScrollView,
   Pressable,
   StyleSheet,
   Text,
@@ -10,7 +12,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { LEGAL } from '@/constants/legal';
 import * as Haptics from 'expo-haptics';
 import { useColors } from '@/hooks/useColors';
 import { useThemeMode } from '@/contexts/ThemeContext';
@@ -53,6 +55,8 @@ export default function SignInScreen() {
   const { sendCode, loginWithCode, state, error } = useEmailLogin();
 
   const [email, setEmail] = useState('');
+  /** Which document is open over the sheet, if any. */
+  const [legal, setLegal] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const inputRef = useRef<TextInput>(null);
   const codeRef = useRef<TextInput>(null);
@@ -333,33 +337,90 @@ export default function SignInScreen() {
             *
             * This was plain text with the documents three taps away inside
             * About, so somebody was asked to accept terms the screen gave them
-            * no way to read. Each half opens the document it names.
+            * no way to read.
+            *
+            * A sheet rather than a route: the layout renders this screen
+            * *instead of* the navigator when nobody is signed in, so
+            * router.push has nothing to push onto and the links did nothing at
+            * all. Mounting the navigator for signed-out people would bring
+            * back the sign-in flash the layout was arranged to avoid.
             */}
           <Text style={[text.data, styles.terms, { color: colors.faintForeground }]}>
             By continuing you agree to our{' '}
-            <Text
-              style={{ color: colors.accent }}
-              onPress={() => router.push('/legal?doc=terms')}
-            >
+            <Text style={{ color: colors.accent }} onPress={() => setLegal('Terms of service')}>
               Terms
             </Text>
             {' and '}
-            <Text
-              style={{ color: colors.accent }}
-              onPress={() => router.push('/legal?doc=privacy')}
-            >
+            <Text style={{ color: colors.accent }} onPress={() => setLegal('Privacy policy')}>
               Privacy Policy
             </Text>
             .
           </Text>
         </Animated.View>
       </KeyboardAwareScrollViewCompat>
+
+      {/*
+        * The document itself, over the sheet.
+        *
+        * Full screen rather than a peek: a privacy policy somebody has to
+        * scroll inside a 200px box is one they will not read, which defeats
+        * the point of making it reachable at all.
+        */}
+      <Modal
+        visible={legal !== null}
+        animationType="slide"
+        onRequestClose={() => setLegal(null)}
+      >
+        <View style={[styles.screen, { backgroundColor: colors.background }]}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{
+              paddingHorizontal: 20,
+              paddingTop: (Platform.OS === 'web' ? 20 : insets.top) + 12,
+              paddingBottom: insets.bottom + 40,
+            }}
+          >
+            <Pressable
+              onPress={() => setLegal(null)}
+              style={[styles.legalClose, { borderColor: colors.border }]}
+            >
+              <Ionicons name="close" size={18} color={colors.foreground} />
+            </Pressable>
+
+            <Text style={[text.display, { color: colors.foreground, marginTop: 20 }]}>
+              {legal}
+            </Text>
+            <Text style={[text.bodySmall, { color: colors.faintForeground, marginTop: 8 }]}>
+              Written in plain language so it can be read. It has not yet been reviewed by a
+              lawyer, and some limits may be narrower in practice than they are written, because
+              consumer law overrides an agreement in places.
+            </Text>
+
+            {LEGAL.find((d) => d.title === legal)?.body.map((para) => (
+              <Text
+                key={para}
+                style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 12 }]}
+              >
+                {para}
+              </Text>
+            ))}
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  legalClose: {
+    width: 38,
+    height: 38,
+    borderWidth: 2,
+    borderRadius: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   // No justifyContent:'center' here. Centring a content container that can
   // outgrow the viewport clips the top of the headline beyond reach.
   scroll: { paddingHorizontal: 24, flexGrow: 1 },
