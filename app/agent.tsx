@@ -89,7 +89,7 @@ export default function AgentScreen() {
     const go = await confirm({
       title: `Revoke ${key.name}?`,
       message:
-        'Anything using this key stops working immediately. Existing jobs are unaffected — they are already yours.',
+        'Anything using this key stops working immediately. Jobs it already created are not affected; those are yours either way.',
       confirmLabel: 'Revoke it',
       cancelLabel: 'Keep it',
       tone: 'danger',
@@ -121,7 +121,7 @@ export default function AgentScreen() {
         <Text style={[text.display, { color: colors.foreground, marginTop: 22 }]}>Confam AI</Text>
         <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 6 }]}>
           An agent that decides whether anybody has to go and look. Ask it about a place and it
-          answers from evidence somebody already brought back, if that still holds — otherwise it
+          answers from evidence somebody already brought back, if that still holds. Otherwise it
           pays a person nearby in USDC on Base to walk there and photograph it.
         </Text>
         <Text style={[text.bodySmall, { color: colors.mutedForeground, marginTop: 10 }]}>
@@ -171,7 +171,8 @@ export default function AgentScreen() {
                   {key.name}
                 </Text>
                 <Text style={[text.data, { color: colors.faintForeground, marginTop: 2 }]}>
-                  {key.hint}…{' · '}
+                  {key.hint}
+                  {'   '}
                   {key.lastUsedAt
                     ? `last used ${new Date(key.lastUsedAt).toLocaleDateString()}`
                     : 'never used'}
