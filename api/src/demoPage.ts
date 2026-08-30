@@ -58,13 +58,7 @@ export const DEMO_PAGE = `<!doctype html>
   .plate img { width:20px; height:20px; border-radius:5px; display:block; }
   .plate:hover img { outline:2px solid var(--accent); outline-offset:1px; }
   .bar b { color:var(--accent); font-weight:700; letter-spacing:.5px; }
-  .bar .right { margin-left:auto; color:var(--faint); }
-  .barbtn {
-    background:transparent; border:1px solid var(--line); color:var(--dim);
-    font:inherit; font-size:11px; padding:2px 8px; cursor:pointer;
-    border-radius:2px; margin-left:10px; flex:none;
-  }
-  .barbtn:hover { border-color:var(--accent); color:var(--accent); }
+  .bar .right { margin-left:auto; color:var(--accent); font-weight:700; letter-spacing:.4px; }
 
   .log { flex:1; overflow-y:auto; padding:16px 14px 10px; scrollbar-width:thin; }
   .log::-webkit-scrollbar { width:8px; }
@@ -127,8 +121,7 @@ export const DEMO_PAGE = `<!doctype html>
     <b>confam</b>
     <span class="dot"></span>
     <span>the physical world, on demand</span>
-    <span class="right" id="budget"></span>
-    <button class="barbtn" id="clear" title="clear the screen">clear</button>
+    <span class="right" id="budget">confamai</span>
   </div>
 
   <div class="log" id="log"></div>
@@ -139,6 +132,7 @@ export const DEMO_PAGE = `<!doctype html>
     <button data-c="/jobs">/jobs</button>
     <button data-c="/watch 1">/watch 1</button>
     <button data-c="/help">/help</button>
+    <button data-c="/clear">/clear</button>
   </div>
 
   <div class="sug" id="sug" hidden></div>
@@ -292,12 +286,6 @@ function hideSuggestions() { sug.hidden = true; picked = -1; }
 box.addEventListener('focus', showSuggestions);
 box.addEventListener('input', showSuggestions);
 box.addEventListener('blur', () => setTimeout(hideSuggestions, 120));
-
-document.getElementById('clear').onclick = () => {
-  log.innerHTML = '';
-  banner();
-  prompt('question');
-};
 
 document.querySelectorAll('.hints button').forEach(b => {
   b.onclick = () => { box.value = b.dataset.c; submit(); };
@@ -712,12 +700,16 @@ async function getKey() {
   }
 }
 
+/**
+ * Read but not displayed in the bar any more.
+ *
+ * A running count of somebody else's budget is not what a visitor is there
+ * for, and it made the header read like a meter. It still gets checked, so
+ * /ask can say plainly when the money has run out — which is the only moment
+ * the number actually matters.
+ */
 async function budget() {
-  try {
-    const b = await (await fetch('/demo/budget')).json();
-    document.getElementById('budget').textContent = b.configured
-      ? b.jobsLeft + ' jobs left' : 'dispatch unfunded';
-  } catch {}
+  try { await (await fetch('/demo/budget')).json(); } catch {}
 }
 budget();
 
