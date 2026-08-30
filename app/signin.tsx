@@ -159,22 +159,31 @@ export default function SignInScreen() {
           </Text>
 
           {/*
-            * Three lines, in the order somebody works it out.
+            * Four lines, in the order somebody works it out.
             *
             * The questions first, because recognising one you have wanted
             * answered explains the product faster than any description of it.
-            * Then who answers, and only then how. A paragraph said the same
-            * things and nobody reads a paragraph on a sign-in screen.
+            * Then who answers, then how, and last the part nobody expects:
+            * machines ask it too, and pay for it.
+            *
+            * Spaced by hand rather than an even gap. The first line is the
+            * hook and the middle two are one thought, so an equal rhythm made
+            * four unrelated statements out of what is really three beats.
             */}
           <View style={styles.facts}>
             <Text style={[text.body, { color: colors.foreground }]}>
               Is the road flooded? Is the queue long? Is the shop open?
             </Text>
-            <Text style={[text.body, { color: colors.mutedForeground }]}>
+
+            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 14 }]}>
               Confam AI answers what is already known.
             </Text>
-            <Text style={[text.body, { color: colors.mutedForeground }]}>
+            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 2 }]}>
               If nobody has been, somebody nearby goes and looks.
+            </Text>
+
+            <Text style={[text.body, { color: colors.accent, marginTop: 14 }]}>
+              Machines ask it too, and pay in USDC.
             </Text>
           </View>
 
@@ -442,7 +451,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  facts: { marginTop: 26, gap: 9 },
+  facts: { marginTop: 30 },
   plate: {
     width: 30,
     height: 30,
