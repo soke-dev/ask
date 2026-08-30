@@ -158,7 +158,7 @@ export default function SignInScreen() {
             <Text style={{ color: colors.accent }}>actually there.</Text>
           </Text>
 
-          <Text style={[text.body, { color: colors.accent, marginTop: 10 }]}>
+          <Text style={[text.body, { color: colors.accent, marginTop: 8 }]}>
             The physical world, on demand.
           </Text>
 
@@ -179,10 +179,10 @@ export default function SignInScreen() {
             <Text style={[text.body, { color: colors.foreground }]}>
               Is the road flooded? Is the queue long? Is the shop open?
             </Text>
-            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 12 }]}>
+            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 8 }]}>
               Confam AI answers what is already known. Otherwise somebody nearby goes and looks.
             </Text>
-            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 12 }]}>
+            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 8 }]}>
               Machines ask it too, and every answer is proved on chain.
             </Text>
           </View>
@@ -451,7 +451,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  facts: { marginTop: 24 },
+  facts: { marginTop: 18 },
   plate: {
     width: 30,
     height: 30,
@@ -462,7 +462,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
 
-  form: { marginTop: 32, gap: 10 },
+  form: { marginTop: 26, gap: 10 },
   field: {
     flexDirection: 'row',
     alignItems: 'center',
