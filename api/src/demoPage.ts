@@ -18,12 +18,15 @@
  * browser sees a SyntaxError that kills every handler on the page. The build
  * parses this script and fails if it cannot.
  */
+import { LOGO_DATA_URI } from './logo.js';
+
 export const DEMO_PAGE = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>confam — ask the physical world</title>
+<link rel="icon" href="${LOGO_DATA_URI}">
 <style>
   :root {
     --bg:#080808; --line:#1F1F1F;
@@ -49,6 +52,11 @@ export const DEMO_PAGE = `<!doctype html>
     color:var(--dim); font-size:12px; flex:none;
   }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); flex:none; }
+  /* The real mark, from the file the app icon is cut from. Inlined, so it
+     cannot arrive late or not at all on a slow connection. */
+  .plate { display:block; flex:none; line-height:0; }
+  .plate img { width:20px; height:20px; border-radius:5px; display:block; }
+  .plate:hover img { outline:2px solid var(--accent); outline-offset:1px; }
   .bar b { color:var(--accent); font-weight:700; letter-spacing:.5px; }
   .bar .right { margin-left:auto; color:var(--faint); }
 
@@ -109,8 +117,9 @@ export const DEMO_PAGE = `<!doctype html>
 <body>
 <div class="term">
   <div class="bar">
-    <span class="dot"></span>
+    <a class="plate" href="https://confam.xyz" title="confam.xyz"><img src="${LOGO_DATA_URI}" alt="Confam"></a>
     <b>confam</b>
+    <span class="dot"></span>
     <span>the physical world, on demand</span>
     <span class="right" id="budget"></span>
   </div>
@@ -118,6 +127,7 @@ export const DEMO_PAGE = `<!doctype html>
   <div class="log" id="log"></div>
 
   <div class="hints">
+    <button data-c="/docs">/docs</button>
     <button data-c="/key">/key</button>
     <button data-c="/jobs">/jobs</button>
     <button data-c="/watch 1">/watch 1</button>
@@ -192,11 +202,14 @@ function withCopy(line, text) {
 const G = '<span class="gutter">  </span>';
 
 function banner() {
-  say('confam — questions no API can answer.', 'ok');
-  say('An agent decides whether anybody has to walk, and pays them in USDC on Base when they do.');
+  say('confam — ground truth, on demand.', 'ok');
+  say('Places, events and situations: whether a road is passable, whether a queue');
+  say('has formed, whether a shop still exists, what is actually happening at an');
+  say('address right now. An agent decides whether anybody has to go and look,');
+  say('and pays them in USDC on Base when they do.');
   say('');
   say('Type a question about a place, then where.', 'dim');
-  say('e.g. is the road flooded right now?  ·  /help for commands', 'dim');
+  say('e.g. is the road flooded right now?  ·  /docs to connect your own agent', 'dim');
 }
 banner();
 
@@ -334,6 +347,7 @@ function command(c) {
   const name = c.slice(1).split(' ')[0];
   if (name === 'help') {
     say(G + 'a question, then a place   ask the agent');
+    say(G + '/docs                      how to point your own agent at this');
     say(G + '/key                       an API key for your own agent');
     say(G + '/jobs                      jobs posted from this browser');
     say(G + '/watch &lt;n&gt;                 follow job n for live updates');
@@ -342,6 +356,7 @@ function command(c) {
   }
   if (name === 'clear') { log.innerHTML = ''; banner(); return; }
   if (name === 'jobs') return jobs();
+  if (name === 'docs' || name === 'api') return docs();
   if (name === 'watch') {
     const n = parseInt(c.slice(1).split(' ')[1], 10);
     const list = saved();
@@ -518,6 +533,63 @@ function follow(id) {
   return watching.has(id)
     ? '<span class="copy" style="cursor:default">following</span>'
     : '<button class="copy" data-follow="' + esc(id) + '">follow</button>';
+}
+
+/**
+ * How to point a program at this.
+ *
+ * Kept in the terminal rather than on a documentation site, because the thing
+ * somebody wants at the moment they get a key is the next command, and a link
+ * to read later is a link nobody opens. Short enough to fit on one screen and
+ * complete enough to work from.
+ */
+function docs() {
+  const base = location.origin;
+  const K = '<span class="gutter">  </span>';
+
+  say('CONNECT YOUR AGENT', 'ok');
+  say(K + '1. run /key and sign with your wallet. no email, no gas.');
+  say(K + '2. send the key as: Authorization: Bearer sk_confam_...');
+  say('');
+
+  say('ASK A QUESTION', 'go');
+  say(K + 'POST ' + base + '/agent/ask');
+  say(K + '{ "question": "Is the gate open?", "place": "Apapa",');
+  say(K + '  "lat": 6.4478, "lng": 3.3619, "bountyNgn": 150 }');
+  say('');
+  say(K + 'Answers one of two ways. If somebody nearby verified that place');
+  say(K + 'recently and it still holds, it returns at once with the photograph');
+  say(K + 'and costs ₦50. Otherwise it locks the bounty in escrow on Base and', 'sys');
+  say(K + 'puts a job on the board for a person to walk to.', 'sys');
+  say('');
+
+  say('GET THE ANSWER', 'go');
+  say(K + 'GET ' + base + '/agent/ask/<id>');
+  say(K + 'poll it. returns the answer, the photographs, the metres from the');
+  say(K + 'pin, the capture time and the verifier.');
+  say('');
+
+  say('WHO PAYS', 'go');
+  say(K + 'we fund ₦150 to ₦300, five jobs a key a day.');
+  say(K + 'for more, send "selfFund": true — the job is created and you sign');
+  say(K + 'the escrow yourself from the wallet your key is bound to, through');
+  say(K + 'POST /escrow/<id>/fund/quote then POST /escrow/<id>/fund.');
+  say(K + 'no limits apply to your own money.');
+  say('');
+
+  say('CHECK THE PROOF', 'go');
+  say(K + 'GET ' + base + '/escrow/<id>/proof   (no key needed)');
+  say(K + 'returns the keccak256 of every evidence file, the escrow job id,');
+  say(K + 'and the funding, claim and release transactions on Base. hash the');
+  say(K + 'photograph yourself and compare — this server is not in the way.');
+  say('');
+
+  say('DO JOBS AS AN AGENT', 'go');
+  say(K + 'not yet. taking a job means being at the place, and the app proves');
+  say(K + 'that with GPS at the moment of capture — which is exactly what a', 'sys');
+  say(K + 'program cannot honestly provide. verifiers are people, on purpose.', 'sys');
+  say('');
+  say(K + 'confam.xyz', 'dim');
 }
 
 /** Asks the contract for an expired job's money back. */
