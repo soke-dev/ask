@@ -81,6 +81,19 @@ export const config = {
      */
     demoBountyKobo: Math.min(num('AGENT_DEMO_BOUNTY_KOBO', 15_000), 15_000),
   },
+
+  /**
+   * Where the landing page sends people to install the app.
+   *
+   * Unset is a real state, not a misconfiguration: a build takes half an hour
+   * and a TestFlight review takes longer, so the page says "coming soon"
+   * rather than offering a link to nothing.
+   */
+  links: {
+    apk: process.env.ANDROID_APK_URL ?? '',
+    testflight: process.env.IOS_TESTFLIGHT_URL ?? '',
+    support: process.env.SUPPORT_EMAIL ?? 'help@confam.xyz',
+  },
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 
   /**

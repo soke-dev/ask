@@ -10,6 +10,8 @@ import { withdrawRouter } from './routes/withdraw.js';
 import { questionsRouter } from './routes/questions.js';
 import { agentRouter } from './routes/agent.js';
 import { demoRouter } from './routes/demo.js';
+import { landingPage } from './landingPage.js';
+import { findDoc, legalPage } from './legalPage.js';
 import { tidyRouter } from './routes/tidy.js';
 import { pushRouter } from './routes/push.js';
 import { escrowRouter } from './routes/escrow.js';
@@ -141,6 +143,34 @@ app.use('/evidence', evidenceRouter);
  */
 if (storageIsLocal) {
   app.use('/media', express.static(config.storageDir));
+}
+
+/**
+ * The website.
+ *
+ * On the API rather than a separate host because it needs to exist today and
+ * has three jobs: somewhere to send people, somewhere the app stores can find
+ * a privacy policy at a public URL, and somewhere the builds download from.
+ *
+ * Last, so nothing here can shadow a route that carries data.
+ */
+app.get('/', (req, res) => {
+  res.type('html').send(landingPage(`${req.protocol}://${req.get('host')}`));
+});
+
+for (const [path, slug] of [
+  ['/terms', 'terms'],
+  ['/privacy', 'privacy'],
+  ['/licences', 'open source'],
+] as const) {
+  app.get(path, (req, res) => {
+    const doc = findDoc(slug);
+    if (!doc) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    res.type('html').send(legalPage(doc, `${req.protocol}://${req.get('host')}`));
+  });
 }
 
 app.use((_req, res) => res.status(404).json({ error: 'not_found' }));

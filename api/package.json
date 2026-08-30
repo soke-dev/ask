@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "node dist/migrate.js && node dist/server.js",
-    "build": "tsc -p tsconfig.json && node scripts/check-demo.mjs",
+    "build": "node scripts/sync-legal.mjs && tsc -p tsconfig.json && node scripts/check-demo.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/migrate.ts",
     "checks:try": "tsx src/checks/try.ts"
