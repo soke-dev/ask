@@ -26,26 +26,6 @@ function isValidEmail(e: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.trim());
 }
 
-/**
- * The whole pitch in two lines: how it happens, then what comes back.
- *
- * These used to lead with "AI powered answers in seconds", which argued
- * against the headline directly above it. The promise is people who are
- * actually there; opening the case for that with a machine undercuts it, and
- * "real people verify what AI cannot" sells the product as the fallback for
- * something else rather than the thing itself.
- *
- * There is AI in here — it reads the evidence and tidies a question — but it
- * is a quality gate behind the scenes, not the reason to sign up, so it does
- * not belong on the door.
- *
- * Neither line repeats the headline. It has already said who does this; these
- * say what actually happens and what you end up holding.
- */
-const FACTS: { icon: keyof typeof Ionicons.glyphMap; line: string }[] = [
-  { icon: 'walk', line: 'Somebody nearby goes and looks.' },
-  { icon: 'camera', line: 'Photo or video back, usually in minutes.' },
-];
 
 export default function SignInScreen() {
   const colors = useColors();
@@ -178,18 +158,24 @@ export default function SignInScreen() {
             <Text style={{ color: colors.accent }}>actually there.</Text>
           </Text>
 
-          {/* ── How it works ───────────────────────────────────────── */}
+          {/*
+            * Three lines, in the order somebody works it out.
+            *
+            * The questions first, because recognising one you have wanted
+            * answered explains the product faster than any description of it.
+            * Then who answers, and only then how. A paragraph said the same
+            * things and nobody reads a paragraph on a sign-in screen.
+            */}
           <View style={styles.facts}>
-            {FACTS.map((f) => (
-              <View key={f.line} style={styles.factRow}>
-                <View style={[styles.plate, { borderColor: colors.accent }]}>
-                  <Ionicons name={f.icon} size={15} color={colors.accent} />
-                </View>
-                <Text style={[text.body, { color: colors.mutedForeground, flex: 1 }]}>
-                  {f.line}
-                </Text>
-              </View>
-            ))}
+            <Text style={[text.body, { color: colors.foreground }]}>
+              Is the road flooded? Is the queue long? Is the shop open?
+            </Text>
+            <Text style={[text.body, { color: colors.mutedForeground }]}>
+              Confam AI answers what is already known.
+            </Text>
+            <Text style={[text.body, { color: colors.mutedForeground }]}>
+              If nobody has been, somebody nearby goes and looks.
+            </Text>
           </View>
 
           {/* ── Sign in ────────────────────────────────────────────── */}
@@ -456,8 +442,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  facts: { marginTop: 26, gap: 12 },
-  factRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  facts: { marginTop: 26, gap: 9 },
   plate: {
     width: 30,
     height: 30,
