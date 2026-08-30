@@ -1,0 +1,4 @@
+# The pages here are rendered by the API and proxied through Vercel.
+# Everything public is linked from the front page.
+User-agent: *
+Allow: /

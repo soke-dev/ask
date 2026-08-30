@@ -1,7 +1,8 @@
 # The public site
 
-This directory is the Vercel project. It contains no pages, and that is the
-point.
+Vercel serves this repository and it has no pages in it, which is the point.
+The configuration is `vercel.json` at the repository root, and the only file
+actually served from disk is `site/public/robots.txt`.
 
 ## Why a proxy and not a copy
 
@@ -15,25 +16,40 @@ that could be copied here:
   cross-origin request that has to be allowed, credentialed, and kept in step
   with the API forever.
 - Both pages write absolute links about themselves, and the proof pages they
-  link to are rendered per question from the database. There is no build step
-  that could turn that into files.
+  link to are rendered per question out of the database. There is no build
+  step that could turn that into files.
 - A copy is a second thing to update. This project has already been bitten by
   a wordmark that lived on three screens and drifted on two of them.
 
-So Vercel serves nothing and forwards everything. One source, on Railway, at
-whatever domain people actually type.
+So Vercel serves almost nothing and forwards everything. One source, on
+Railway, at whatever domain people actually type.
+
+## Why the config is at the root and not in here
+
+It was in here, and the Vercel import picker would not show this directory,
+so the root directory could not be set to it. The root is the default, needs
+no picker, and cannot be got wrong.
+
+That means Vercel sees the whole repository, which is why the config is
+explicit about three things it would otherwise guess:
+
+- `installCommand` and `buildCommand` are no-ops. The root `package.json` has
+  a `build` script that builds the Expo web app, and Vercel would have found
+  it and run it.
+- `outputDirectory` is `site/public`, so the only file served from disk is
+  `robots.txt`. Without it the repository root is the web root and
+  `google-services.json`, `app.json` and the rest are all fetchable.
 
 ## What is forwarded
 
 Only the public surface. `/auth`, `/admin`, `/identity`, `/questions`,
 `/withdraw` and the rest are not listed, so they are simply not reachable
-here — the app talks to Railway directly and does not need them at this
-domain.
+here. The app talks to Railway directly and does not need them at this domain.
 
 ## Setting it up
 
-1. Import this repository in Vercel and set **Root Directory** to `site`.
-   There is nothing to build; the framework preset is `Other`.
+1. Import the repository in Vercel. Leave **Root Directory** as `/` and the
+   framework preset as **Other**. `vercel.json` covers the rest.
 2. Add the domain in Vercel and point DNS at it.
 3. On Railway, set `PUBLIC_ORIGIN` to that domain, for example
    `https://confam.xyz`.
@@ -46,5 +62,5 @@ it. See `api/src/origin.ts`.
 
 ## When the API moves
 
-The Railway hostname appears ten times above. If it changes, it changes here
-too, and nowhere else.
+The Railway hostname appears ten times in `vercel.json`. If it changes, it
+changes there, and nowhere else.
