@@ -1,6 +1,7 @@
 import { LOGO_DATA_URI } from './logo.js';
 import { config } from './config.js';
 import { APP_SHOT_DATA_URI, APP_SHOT_BG, APP_SHOT_SIZE } from './appShot.js';
+import { ANDROID_BADGE, TESTFLIGHT_BADGE, type StoreBadge } from './storeBadges.js';
 
 /**
  * The front door.
@@ -77,20 +78,6 @@ const ICONS: Record<string, string> = {
 
   chev: '<path d="m6.5 9.5 5.5 5.5 5.5-5.5"/>',
 
-  /*
-   * Outlined, not filled. A solid body needs its eyes punched out in the
-   * colour behind it, and an icon cannot know what it is sitting on: on the
-   * orange button the body is near black and eyes in the surface colour
-   * disappear into it. Outline works on every background there is.
-   */
-  android: '<path d="M6 10.6a6 6 0 0 1 12 0v6.2a1.8 1.8 0 0 1-1.8 1.8H7.8A1.8 1.8 0 0 1 6 16.8z"/>'
-         + '<path d="M8.6 5.7 7.2 3.2M15.4 5.7l1.4-2.5"/>'
-         + '<circle cx="9.9" cy="9.9" r=".55" fill="currentColor" stroke="none"/>'
-         + '<circle cx="14.1" cy="9.9" r=".55" fill="currentColor" stroke="none"/>',
-
-  /* The brand marks below are Simple Icons, MIT. */
-  apple: '<path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.088-4.61 1.088zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/>',
-
   x: '<path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932zM17.61 20.644h2.039L6.486 3.24H4.298z"/>',
 
   github: '<path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>',
@@ -104,22 +91,19 @@ function icon(name: string, solid = false): string {
   return `<svg class="ico${solid ? ' solid' : ''}" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
 }
 
-/** A download that may not exist yet says so rather than linking nowhere. */
-function download(
-  href: string,
-  label: string,
-  sub: string,
-  primary: boolean,
-  mark: string,
-): string {
-  if (!href) {
-    return `<span class="btn disabled">${mark}<span class="txt">
-      <b>${esc(label)}</b><em>coming soon</em>
-    </span></span>`;
-  }
-  return `<a class="btn${primary ? ' primary' : ''}" href="${esc(href)}">${mark}<span class="txt">
-    <b>${esc(label)}</b><em>${esc(sub)}</em>
-  </span></a>`;
+/**
+ * A store badge, linked when there is something to link to.
+ *
+ * Dimmed and captioned rather than hidden when there is not: "coming soon" is
+ * a fact somebody wants, and a button that is not there answers nothing. It is
+ * a span in that case, so it cannot be clicked into a page that does not exist.
+ */
+function storeBadge(href: string, badge: StoreBadge): string {
+  const img =
+    `<img src="${badge.src}" width="${badge.width}" height="${badge.height}"` +
+    ` alt="${esc(badge.alt)}">`;
+  if (!href) return `<span class="badge off">${img}<em>coming soon</em></span>`;
+  return `<a class="badge" href="${esc(href)}">${img}</a>`;
 }
 
 /**
@@ -148,9 +132,7 @@ export function landingPage(origin: string): string {
 
   // The same pair opens the page and closes it, so a reader who scrolls the
   // whole thing does not have to scroll back up to act on it.
-  const stores =
-    download(apk, 'Download for Android', 'APK, installs directly', true, icon('android')) +
-    download(testflight, 'Get it on iPhone', 'TestFlight beta', false, icon('apple', true));
+  const stores = storeBadge(apk, ANDROID_BADGE) + storeBadge(testflight, TESTFLIGHT_BADGE);
 
   return `<!doctype html>
 <html lang="en">
@@ -241,7 +223,21 @@ export function landingPage(origin: string): string {
   .asks { font-family:var(--mono); font-size:14px; color:var(--fg); margin:20px 0 28px; }
   .asks span { color:var(--faint); }
 
+  .badges { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-start; }
+  .badges.centre { justify-content:center; }
+  .badge { display:block; text-decoration:none; }
+  .badge img { display:block; height:52px; width:auto; }
+  .badge:hover img { filter:brightness(1.12); }
+  /* The caption stays legible; it is the badge that is greyed out, not the fact. */
+  .badge.off { cursor:default; }
+  .badge.off img { opacity:.36; }
+  .badge em {
+    display:block; font-style:normal; text-align:center;
+    font-size:12px; color:var(--faint); margin-top:8px;
+  }
+
   .btns { display:flex; flex-wrap:wrap; gap:11px; }
+  .btns.after { margin-top:16px; }
   .btn {
     display:flex; align-items:center; gap:11px; text-decoration:none;
     border:2px solid var(--line-strong); border-radius:2px;
@@ -424,8 +420,8 @@ export function landingPage(origin: string): string {
           Is the shop open? <span>&middot;</span> Did the delivery arrive?
         </p>
 
-        <div class="btns" id="get">
-          ${stores}
+        <div class="badges" id="get">${stores}</div>
+        <div class="btns after">
           <a class="btn" href="${esc(origin)}/confamagent">
             ${icon('terminal')}
             <span class="txt"><b>Try Confam Agent</b><em>in your browser, no install</em></span>
@@ -630,7 +626,7 @@ export function landingPage(origin: string): string {
 <div class="close">
   <h2>Stop guessing. Confam it.</h2>
   <p>Ask about anywhere, and let somebody who is already there settle it.</p>
-  <div class="btns">${stores}</div>
+  <div class="badges centre">${stores}</div>
 </div>
 
 <footer>
