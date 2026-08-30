@@ -116,6 +116,110 @@ demoRouter.get('/places', async (_req, res) => {
 });
 
 /**
+ * Somewhere real, typed at the prompt.
+ *
+ * The page offered only places the network had already been, which is right
+ * for steering somebody towards the free answer and useless the moment they
+ * want to ask about anywhere else. The app has always searched OpenStreetMap
+ * through Photon; this is the same lookup, so a place picked here and a place
+ * picked in the app are the same record with the same coordinates.
+ *
+ * Proxied rather than called from the browser so the page keeps talking to one
+ * origin, and so coverage can be merged in ahead of the live results — a
+ * place somebody has already checked is worth more than a better string match.
+ */
+demoRouter.get('/search', async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (q.length < 2) {
+    res.json({ places: [] });
+    return;
+  }
+
+  // Places with real coverage first, so the instant path stays reachable.
+  const covered = await query<{ name: string; lat: number | null; lng: number | null }>(
+    `SELECT p.name, max(p.lat) AS lat, max(p.lng) AS lng
+       FROM questions qq
+       JOIN tasks t  ON t.question_id = qq.id
+       JOIN places p ON p.id = qq.place_id
+      WHERE qq.visibility = 'public'
+        AND t.status IN ('submitted', 'confirmed')
+        AND p.name ILIKE '%' || $1 || '%'
+      /*
+       * Grouped by name alone. Grouping by the coordinates too returned the
+       * same place twice whenever two rows carried different ones — and one of
+       * the duplicates had no coordinates at all, so picking it would have
+       * dropped the place back to string matching.
+       *
+       * max() skips nulls, so a name that has ever had coordinates keeps them.
+       */
+      GROUP BY p.name
+      ORDER BY max(t.submitted_at) DESC
+      LIMIT 3`,
+    [q],
+  );
+
+  const places = covered.map((c) => ({
+    name: c.name,
+    area: '',
+    lat: c.lat,
+    lng: c.lng,
+    covered: true,
+  }));
+
+  /**
+   * Then whatever OpenStreetMap knows.
+   *
+   * Failure here is not an error: the covered list is still useful, and a
+   * geocoder being unreachable should narrow the choices rather than break
+   * the prompt.
+   */
+  try {
+    const url = new URL('https://photon.komoot.io/api');
+    url.searchParams.set('q', q);
+    url.searchParams.set('limit', '8');
+    url.searchParams.set('lang', 'en');
+    // Biased toward Lagos, the same as the app does, since Photon ranks by
+    // distance from this point and most questions are Nigerian.
+    url.searchParams.set('lat', '6.5244');
+    url.searchParams.set('lon', '3.3792');
+
+    const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (response.ok) {
+      const data = (await response.json()) as {
+        features?: { properties?: Record<string, unknown>; geometry?: { coordinates?: number[] } }[];
+      };
+
+      const seen = new Set(places.map((p2) => p2.name.toLowerCase()));
+
+      for (const f of data.features ?? []) {
+        const props = f.properties ?? {};
+        const name = String(props.name ?? props.street ?? props.city ?? '').trim();
+        if (!name || seen.has(name.toLowerCase())) continue;
+        seen.add(name.toLowerCase());
+
+        const area = [props.district, props.city, props.state]
+          .filter((x) => typeof x === 'string' && x && x !== name)
+          .join(', ');
+
+        const c = f.geometry?.coordinates;
+        places.push({
+          name,
+          area,
+          lat: Array.isArray(c) ? (c[1] ?? null) : null,
+          lng: Array.isArray(c) ? (c[0] ?? null) : null,
+          covered: false,
+        });
+        if (places.length >= 7) break;
+      }
+    }
+  } catch {
+    // Covered results stand on their own.
+  }
+
+  res.json({ places });
+});
+
+/**
  * Ask the agent, from the page.
  *
  * The judgment runs for everybody — it costs nothing and is the thing worth

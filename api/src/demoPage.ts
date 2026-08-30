@@ -58,6 +58,8 @@ export const DEMO_PAGE = `<!doctype html>
   .plate img { width:20px; height:20px; border-radius:5px; display:block; }
   .plate:hover img { outline:2px solid var(--accent); outline-offset:1px; }
   .bar b { color:var(--accent); font-weight:700; letter-spacing:.5px; }
+  /* The "ai" reads as part of the name without shouting over it. */
+  .bar b em { font-style:normal; color:var(--ok); }
   .bar .right { margin-left:auto; color:var(--accent); font-weight:700; letter-spacing:.4px; }
 
   .log { flex:1; overflow-y:auto; padding:16px 14px 10px; scrollbar-width:thin; }
@@ -92,7 +94,8 @@ export const DEMO_PAGE = `<!doctype html>
     display:flex; gap:9px; align-items:baseline;
   }
   .sug div:hover, .sug div.on { background:#101010; color:var(--fg); }
-  .sug div i { color:var(--faint); font-style:normal; flex:none; }
+  .sug div i { color:var(--faint); font-style:normal; flex:none; width:44px; }
+  .sug div .area { color:var(--faint); margin-left:8px; font-size:12px; }
   .sug div:hover i, .sug div.on i { color:var(--accent); }
 
   .hints { padding:0 14px 12px; display:flex; flex-wrap:wrap; gap:6px; flex:none; }
@@ -118,10 +121,10 @@ export const DEMO_PAGE = `<!doctype html>
 <div class="term">
   <div class="bar">
     <a class="plate" href="https://confam.xyz" title="confam.xyz"><img src="${LOGO_DATA_URI}" alt="Confam"></a>
-    <b>confam</b>
+    <b>confam<em>ai</em></b>
     <span class="dot"></span>
     <span>the physical world, on demand</span>
-    <span class="right" id="budget">confamai</span>
+    <span class="right" id="budget"></span>
   </div>
 
   <div class="log" id="log"></div>
@@ -259,25 +262,67 @@ fetch('/demo/places')
 const sug = document.getElementById('sug');
 let picked = -1;
 
+/** Coordinates for the place last picked, so proximity matching can use them. */
+let placeCoords = null;
+
 function suggestions() {
   const typed = box.value.trim().toLowerCase();
-  const pool = step === 'place' ? PLACES : step === 'question' ? ASKS : [];
+  const pool = step === 'place' ? PLACES.map(p => ({ name: p })) :
+               step === 'question' ? ASKS.map(a => ({ name: a })) : [];
   if (!pool.length) return [];
-  return pool.filter(x => !typed || x.toLowerCase().includes(typed)).slice(0, 5);
+  return pool.filter(x => !typed || x.name.toLowerCase().includes(typed)).slice(0, 5);
+}
+
+/**
+ * Anywhere real, once somebody starts typing a place.
+ *
+ * The fixed list only covers where the network has been, which is right for
+ * steering towards a free answer and useless for asking about anywhere else.
+ * Searching hands back coordinates too, so a place typed here matches by
+ * proximity rather than by an exact string — the difference between "Etete"
+ * and "Etete Road" finding each other, and not.
+ */
+let searchTimer = null;
+
+async function searchPlaces() {
+  const q = box.value.trim();
+  if (step !== 'place' || q.length < 2) return;
+  try {
+    const r = await (await fetch('/demo/search?q=' + encodeURIComponent(q))).json();
+    if (step !== 'place' || box.value.trim() !== q) return;   // moved on since
+    if (!r.places || !r.places.length) return;
+    renderSuggestions(r.places.slice(0, 6));
+  } catch {}
 }
 
 function showSuggestions() {
-  const list = suggestions();
-  if (!list.length) { sug.hidden = true; return; }
+  renderSuggestions(suggestions());
+  if (step === 'place') {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(searchPlaces, 220);
+  }
+}
+
+function renderSuggestions(list) {
+  if (!list || !list.length) { sug.hidden = true; return; }
   picked = -1;
   sug.innerHTML = list
     .map((x, i) => '<div data-i="' + i + '"><i>' +
-      (step === 'place' ? 'where' : 'ask') + '</i>' + esc(x) + '</div>')
+      (step === 'place' ? (x.covered ? 'known' : 'where') : 'ask') + '</i>' +
+      esc(x.name) +
+      (x.area ? '<span class="area">' + esc(x.area) + '</span>' : '') + '</div>')
     .join('');
   sug.hidden = false;
   // mousedown, not click: blur would hide the list before a click landed.
   sug.querySelectorAll('div').forEach((el, i) => {
-    el.onmousedown = (e) => { e.preventDefault(); box.value = list[i]; hideSuggestions(); submit(); };
+    el.onmousedown = (e) => {
+      e.preventDefault();
+      box.value = list[i].name;
+      placeCoords = (list[i].lat != null && list[i].lng != null)
+        ? { lat: list[i].lat, lng: list[i].lng } : null;
+      hideSuggestions();
+      submit();
+    };
   });
 }
 
@@ -333,6 +378,7 @@ async function submit() {
 
   if (step === 'question') {
     pending = text;
+    placeCoords = null;
     say('<i>&gt;</i> ' + esc(text), 'you');
     prompt('place');
     return;
@@ -343,18 +389,21 @@ async function submit() {
     const yes = /^(y|yes)$/i.test(text);
     prompt('question');
     if (!yes) { say(G + 'nothing sent. no money moved.', 'dim'); return; }
-    await ask(offer.question, offer.place, true);
+    await ask(offer.question, offer.place, true, offer.at);
     return;
   }
 
   say('<i>where?</i> ' + esc(text), 'you');
   const place = text;
+  const at = placeCoords;
   prompt('question');
-  await ask(pending, place);
+  await ask(pending, place, false, at);
 }
 
 /** What the agent proposed to spend on, held while the y/n is answered. */
-let offer = { question: '', place: '' };
+let offer = { question: '', place: '', at: null };
+/** The coordinates the last ask used, so a confirmation reuses them. */
+let lastAt = null;
 
 function command(c) {
   const name = c.slice(1).split(' ')[0];
@@ -383,12 +432,16 @@ function command(c) {
   say(G + 'unknown command. /help', 'warn');
 }
 
-async function ask(question, place, confirm) {
+async function ask(question, place, confirm, at) {
+  lastAt = at || lastAt;
   const thinking = say(G + (confirm ? 'locking the bounty on Base...' : 'checking what the network already knows...'), 'dim');
   try {
     const r = await fetch('/demo/ask', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, place, confirm: confirm === true }),
+      body: JSON.stringify({
+        question, place, confirm: confirm === true,
+        lat: at ? at.lat : null, lng: at ? at.lng : null,
+      }),
     });
     const d = await r.json();
     thinking.remove();
@@ -417,7 +470,7 @@ function render(d, question, place) {
     say(G + esc(d.because), 'dim');
     say(G + 'nobody has been. sending somebody costs ₦' + d.costNgn +
         ' and locks that in USDC on Base.', 'go');
-    offer = { question: d.question, place: d.place };
+    offer = { question: d.question, place: d.place, at: lastAt };
     prompt('confirm');
     return;
   }
