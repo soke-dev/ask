@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { config, hasAgents } from '../config.js';
 import { one, query, transaction } from '../db.js';
 import { resolveKey } from '../agentAuth.js';
-import { triage } from '../agentTriage.js';
+import { ago, triage } from '../agentTriage.js';
 import { storage } from '../storage.js';
 import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 import { notify, nearbyVerifiers } from '../push.js';
@@ -217,6 +217,53 @@ demoRouter.get('/search', async (req, res) => {
   }
 
   res.json({ places });
+});
+
+/**
+ * What the network has answered lately, anywhere.
+ *
+ * The terminal shows one conversation and nothing else, so a page that has
+ * been open for ten seconds looks like a network with nothing in it. This is
+ * the same feed the app puts on its home screen, unfiltered by area: the
+ * evidence that the thing is being used by people who are not you.
+ *
+ * Public questions only, and no evidence: a list is not the place to publish
+ * photographs, and anybody who wants one can open the proof.
+ */
+demoRouter.get('/answered', async (_req, res) => {
+  const rows = await query<{
+    id: string;
+    text: string;
+    placeName: string | null;
+    area: string | null;
+    state: string | null;
+    confirmed: boolean;
+    minutesOld: number;
+  }>(
+    `SELECT q.id, q.body AS text,
+            p.name AS "placeName", p.area, p.state,
+            (t.status = 'confirmed') AS confirmed,
+            EXTRACT(EPOCH FROM (now() - t.submitted_at)) / 60 AS "minutesOld"
+       FROM questions q
+       JOIN tasks t       ON t.question_id = q.id
+       LEFT JOIN places p ON p.id = q.place_id
+      WHERE q.visibility = 'public'
+        AND t.submitted_at IS NOT NULL
+      ORDER BY t.submitted_at DESC
+      LIMIT 12`,
+  );
+
+  res.json({
+    answered: rows.map((r) => ({
+      id: r.id,
+      text: r.text,
+      // The most specific name first, the same order the app resolved on:
+      // OSM puts the locality in one field or the other depending on the place.
+      where: [r.placeName, r.area, r.state].filter(Boolean).join(', ') || 'somewhere',
+      confirmed: r.confirmed,
+      ago: ago(Math.round(Number(r.minutesOld))),
+    })),
+  });
 });
 
 /**

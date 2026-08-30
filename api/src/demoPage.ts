@@ -40,11 +40,40 @@ export const DEMO_PAGE = `<!doctype html>
     font:13.5px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
     display:flex; justify-content:center; padding:0 12px;
   }
+  .wrap { display:flex; width:100%; max-width:1120px; height:100dvh; }
   .term {
-    width:100%; max-width:760px; height:100dvh;
+    flex:1; min-width:0; height:100dvh;
     display:flex; flex-direction:column;
     border-left:1px solid var(--line); border-right:1px solid var(--line);
   }
+
+  /*
+   * What the network answered lately, anywhere.
+   *
+   * A terminal shows one conversation, so a page open for ten seconds looks
+   * like a network with nothing in it. This is the evidence that people who
+   * are not you are using it.
+   *
+   * Hidden below 900px rather than stacked: on a phone it would push the
+   * prompt off the screen, and the prompt is the whole point of the page.
+   */
+  .feed {
+    width:300px; flex:none; height:100dvh; overflow-y:auto;
+    border-right:1px solid var(--line); scrollbar-width:thin;
+  }
+  .feed::-webkit-scrollbar { width:8px; }
+  .feed::-webkit-scrollbar-thumb { background:#1C1C1C; }
+  .feed h2 {
+    font-size:10.5px; letter-spacing:1.4px; text-transform:uppercase; color:var(--faint);
+    font-weight:700; margin:0; padding:13px 14px 10px; border-bottom:1px solid var(--line);
+    position:sticky; top:0; background:var(--bg);
+  }
+  .feed .item { padding:12px 14px; border-bottom:1px solid var(--line); }
+  .feed .q { color:var(--fg); margin:0 0 5px; line-height:1.5; }
+  .feed .m { color:var(--faint); font-size:11.5px; }
+  .feed .ok { color:var(--ok); }
+  .feed .no { color:var(--warn); }
+  @media (max-width: 900px) { .feed { display:none; } }
 
   .bar {
     display:flex; align-items:center; gap:9px;
@@ -118,6 +147,8 @@ export const DEMO_PAGE = `<!doctype html>
 </style>
 </head>
 <body>
+<div class="wrap">
+<aside class="feed"><h2>Answered recently</h2><div id="feed"></div></aside>
 <div class="term">
   <div class="bar">
     <a class="plate" href="https://confam.xyz" title="confam.xyz"><img src="${LOGO_DATA_URI}" alt="Confam"></a>
@@ -144,6 +175,7 @@ export const DEMO_PAGE = `<!doctype html>
     <span class="ps1" id="ps1">&gt;</span>
     <input id="in" autocomplete="off" autofocus placeholder="ask about any place, right now">
   </div>
+</div>
 </div>
 
 <script>
@@ -534,6 +566,7 @@ function watch(id, line) {
             (j.capturedAt ? new Date(j.capturedAt).toUTCString() : ''), 'dim');
         (j.evidence || []).forEach(u => say('<img src="' + esc(u) + '" alt="evidence">', 'dim'));
         say(G + '<a href="' + esc(j.proof) + '" target="_blank" rel="noopener">verify on Base →</a>', 'dim');
+        feed();
       }
     } catch {}
   }, 5000);
@@ -771,6 +804,36 @@ async function getKey() {
  * /ask can say plainly when the money has run out — which is the only moment
  * the number actually matters.
  */
+/**
+ * Fills the side column, and keeps it current.
+ *
+ * Refreshed on a slow timer rather than pushed: nothing here is urgent, and a
+ * socket for a list nobody is waiting on is a connection to keep alive for no
+ * reason. It also refreshes after an answer arrives, since the job somebody
+ * just watched should appear in it.
+ */
+async function feed() {
+  try {
+    const r = await (await fetch('/demo/answered')).json();
+    const box = document.getElementById('feed');
+    if (!box) return;
+    if (!r.answered || !r.answered.length) {
+      box.innerHTML = '<div class="item"><p class="m">Nothing answered yet.</p></div>';
+      return;
+    }
+    box.innerHTML = r.answered.map(a =>
+      '<div class="item">' +
+      '<p class="q">' + esc(a.text) + '</p>' +
+      '<p class="m"><span class="' + (a.confirmed ? 'ok' : 'no') + '">' +
+      (a.confirmed ? 'Confirmed' : 'Unconfirmed') + '</span>' +
+      ' &middot; ' + esc(a.ago) + ' &middot; ' + esc(a.where) + '</p>' +
+      '</div>'
+    ).join('');
+  } catch {}
+}
+feed();
+setInterval(feed, 60_000);
+
 async function budget() {
   try { await (await fetch('/demo/budget')).json(); } catch {}
 }
