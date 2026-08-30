@@ -35,6 +35,26 @@ export const DEMO_PAGE = `<!doctype html>
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
+
+  /*
+   * The scrollbars, because the default one is not dark.
+   *
+   * Only the thumb was styled, so the track stayed the browser's own light
+   * grey and every scrollable pane had a bright bar down its edge, which on a
+   * black terminal is the first thing the eye lands on.
+   *
+   * Both syntaxes: scrollbar-color for Firefox, the webkit pseudo-elements for
+   * everything else. Neither alone covers it.
+   */
+  * { scrollbar-width: thin; scrollbar-color: #2A2A2A transparent; }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb {
+    background:#242424; border-radius:0;
+    border:2px solid var(--bg);
+  }
+  ::-webkit-scrollbar-thumb:hover { background:#333; }
+  ::-webkit-scrollbar-corner { background:transparent; }
   body {
     margin:0; background:var(--bg); color:var(--fg);
     font:13.5px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
@@ -59,10 +79,8 @@ export const DEMO_PAGE = `<!doctype html>
    */
   .feed {
     width:300px; flex:none; height:100dvh; overflow-y:auto;
-    border-right:1px solid var(--line); scrollbar-width:thin;
+    border-right:1px solid var(--line);
   }
-  .feed::-webkit-scrollbar { width:8px; }
-  .feed::-webkit-scrollbar-thumb { background:#1C1C1C; }
   .feed h2 {
     font-size:10.5px; letter-spacing:1.4px; text-transform:uppercase; color:var(--faint);
     font-weight:700; margin:0; padding:13px 14px 10px; border-bottom:1px solid var(--line);
@@ -91,9 +109,7 @@ export const DEMO_PAGE = `<!doctype html>
   .bar b em { font-style:normal; color:var(--ok); }
   .bar .right { margin-left:auto; color:var(--accent); font-weight:700; letter-spacing:.4px; }
 
-  .log { flex:1; overflow-y:auto; padding:16px 14px 10px; scrollbar-width:thin; }
-  .log::-webkit-scrollbar { width:8px; }
-  .log::-webkit-scrollbar-thumb { background:#1C1C1C; }
+  .log { flex:1; overflow-y:auto; padding:16px 14px 10px; }
 
   .ln { white-space:pre-wrap; overflow-wrap:anywhere; margin:0 0 2px; }
   .ln.you   { color:var(--fg); margin-top:15px; }
