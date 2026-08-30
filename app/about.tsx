@@ -50,6 +50,26 @@ const LEGAL: { title: string; body: string[] }[] = [
       'Programs can ask questions too, with a key. A job an agent posted reaches the same board and pays the same person; if the agent never comes back to accept an answer, it is accepted for them after fifteen minutes so nobody who walked somewhere is left waiting.',
       'Answers describe one moment at one place. Things change. We do not promise an answer is still true later, and you should not lean on one for a decision that matters without checking it again.',
       'Using the app for surveillance, for scouting a target, for harassment, or to ask anyone to break the law ends the account immediately.',
+
+      'YOUR WALLET IS YOURS ALONE. It is non-custodial: the keys are held on your device and by your wallet provider, never by us. We cannot move your funds, freeze them, reverse a payment, or recover them if you lose access. A transaction confirmed on the Base network is final and cannot be undone by anyone, including us.',
+
+      'WE DO NOT HOLD YOUR MONEY. A bounty is locked by a smart contract on Base. We are not a bank, a custodian, a payment processor or a money transmitter, and we take no deposits. The contract pays out according to its own rules and a decision you or a reviewer make.',
+
+      'THE SERVICE IS PROVIDED AS IS. We make no warranty, express or implied, that an answer is accurate, complete, current, or fit for any purpose. An answer describes one moment at one place as one person found it. Do not rely on one for a decision involving safety, money, health, property or legal rights without checking it yourself.',
+
+      'VERIFIERS ARE INDEPENDENT. They are not our employees, agents, partners or representatives. We do not direct, supervise or control what they do, and we are not responsible for their conduct, their accuracy, their honesty, or anything that happens to them or to anyone else while they are doing a job.',
+
+      'WE ARE NOT LIABLE FOR LOSS. To the fullest extent the law allows, we are not liable for any indirect, incidental, special, consequential, punitive or exemplary loss, nor for lost profit, lost data, lost opportunity, or business interruption, however caused, even if we were told such loss was possible.',
+
+      `WHERE LIABILITY CANNOT BE EXCLUDED, IT IS CAPPED. Our total liability to you for any claim is limited to the greater of the amount you paid us in fees on the specific question the claim concerns, or ₦${formatNaira(10000)}. This cap applies however the claim is framed, in contract, in negligence or otherwise.`,
+
+      'WE ARE NOT LIABLE FOR THINGS OUTSIDE OUR CONTROL. That includes the Base network, its congestion, forks, reorganisations or downtime; a fault in a smart contract; the exchange rate; your wallet provider; a geocoding provider; a model provider; your device; your network; or any act of a third party.',
+
+      'YOU INDEMNIFY US. If a claim is brought against us because of how you used the app, what you asked for, what you did on a job, or because you broke these terms or the law, you will cover our losses and our reasonable legal costs.',
+
+      'You must be 18 or older and legally able to enter a contract. You are responsible for the tax on anything you earn here.',
+
+      'These terms are governed by the laws of the Federal Republic of Nigeria. Nothing here removes a right you have under consumer law that cannot be excluded by agreement.',
     ],
   },
   {
@@ -136,6 +156,31 @@ export default function AboutScreen() {
         ))}
 
         <Text style={[text.label, styles.groupLabel, { color: colors.faintForeground }]}>
+          Confam AI
+        </Text>
+
+        <Text style={[text.body, { color: colors.mutedForeground }]}>
+          Every question goes to the agent first. It reads what somebody already verified about
+          that place and how long ago, weighs it against what you are asking, and decides one
+          thing: does anybody have to go.
+        </Text>
+        <Text style={[text.body, { color: colors.mutedForeground, marginTop: 10 }]}>
+          It never answers from its own knowledge. Everything it gives you came from a person who
+          stood there and photographed it, so a wrong answer is a wrong photograph rather than a
+          confident guess. When it decides the evidence has aged past being true, it sends
+          somebody instead, and tells you why in plain words before you spend anything.
+        </Text>
+        <Text style={[text.body, { color: colors.mutedForeground, marginTop: 10 }]}>
+          It also reads evidence as it arrives, checking it is clear enough and shows what was
+          asked. It can flag work but never rejects it: the person who walked there can send it
+          anyway, and you decide.
+        </Text>
+        <Text style={[text.body, { color: colors.mutedForeground, marginTop: 10 }]}>
+          Programs can use it too. You → Confam AI issues a key, and an agent can ask questions
+          and pay verifiers exactly as the app does.
+        </Text>
+
+        <Text style={[text.label, styles.groupLabel, { color: colors.faintForeground }]}>
           The rules
         </Text>
 
@@ -168,6 +213,21 @@ export default function AboutScreen() {
 
         <Text style={[text.label, styles.groupLabel, { color: colors.faintForeground }]}>
           Legal
+        </Text>
+
+        {/*
+          * Said before the documents rather than buried after them.
+          *
+          * These describe what the app actually does and are written to be
+          * read, which is not the same as having been settled by a lawyer for
+          * the country they operate in. A limitation of liability that has
+          * never been reviewed is the clause most likely not to hold when it
+          * is finally needed.
+          */}
+        <Text style={[text.bodySmall, { color: colors.faintForeground, marginBottom: 6 }]}>
+          Written in plain language so they can be read. They have not yet been reviewed by a
+          lawyer, and some limits below may be narrower in practice than they are written,
+          because consumer law overrides an agreement in places.
         </Text>
 
         {LEGAL.map((doc) => {
