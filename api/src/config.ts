@@ -102,6 +102,12 @@ export const config = {
     github: process.env.GITHUB_URL ?? '',
     telegram: process.env.TELEGRAM_URL ?? '',
   },
+  /**
+   * The address the pages should call themselves, when something sits in
+   * front of this server. Unset in development, where the request is honest.
+   */
+  publicOrigin: (process.env.PUBLIC_ORIGIN ?? '').replace(/\/+$/, ''),
+
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 
   /**

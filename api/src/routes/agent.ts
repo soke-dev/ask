@@ -10,6 +10,7 @@ import { ago, knownFor, triage } from '../agentTriage.js';
 import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 import { notify, nearbyVerifiers } from '../push.js';
 import { fundAsAgent, releaseAsAgent } from '../agentWallet.js';
+import { originOf } from '../origin.js';
 
 export const agentRouter: Router = Router();
 
@@ -79,7 +80,7 @@ agentRouter.use((req, res, next) => {
  * keys exist.
  */
 agentRouter.get('/', (req, res) => {
-  const base = `${req.protocol}://${req.get('host')}`;
+  const base = originOf(req);
 
   res.json({
     name: 'confam',

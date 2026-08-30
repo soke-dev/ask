@@ -21,6 +21,7 @@ import { startAgentSettlement } from './agentSettle.js';
 import { attachRealtime, realtimeStatus } from './realtime.js';
 import { chainStatus } from './chain.js';
 import { relayerStatus } from './relayer.js';
+import { originOf } from './origin.js';
 
 const app = express();
 
@@ -44,7 +45,13 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.use(cors());
+/*
+   * Railway terminates TLS and forwards plain HTTP. Without this, req.protocol
+   * is "http", which put an insecure scheme on every link the landing page
+   * wrote about itself, and req.ip is the proxy rather than the caller.
+   */
+  app.set('trust proxy', true);
+  app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 /**
@@ -155,7 +162,7 @@ if (storageIsLocal) {
  * Last, so nothing here can shadow a route that carries data.
  */
 app.get('/', (req, res) => {
-  res.type('html').send(landingPage(`${req.protocol}://${req.get('host')}`));
+  res.type('html').send(landingPage(originOf(req)));
 });
 
 for (const [path, slug] of [
@@ -169,7 +176,7 @@ for (const [path, slug] of [
       res.status(404).json({ error: 'not_found' });
       return;
     }
-    res.type('html').send(legalPage(doc, `${req.protocol}://${req.get('host')}`));
+    res.type('html').send(legalPage(doc, originOf(req)));
   });
 }
 

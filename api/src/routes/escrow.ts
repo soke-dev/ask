@@ -9,6 +9,7 @@ import { one, query, transaction } from '../db.js';
 import { notify, nearbyVerifiers } from '../push.js';
 import { config, hasEscrow } from '../config.js';
 import { ngnRate } from '../rates.js';
+import { originOf } from '../origin.js';
 import {
   claimPayload,
   disputePayload,
@@ -405,7 +406,7 @@ escrowRouter.get('/:questionId/proof', async (req, res) => {
     return;
   }
 
-  res.type('html').send(proofPage(view, `${req.protocol}://${req.get('host')}`));
+  res.type('html').send(proofPage(view, originOf(req)));
 });
 
 escrowRouter.post('/:questionId/claim/quote', authenticate, async (req, res) => {
