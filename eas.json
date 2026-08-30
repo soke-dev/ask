@@ -24,7 +24,22 @@
     "production": {
       "channel": "production",
       "autoIncrement": true,
-      "node": "20.19.5"
+      "node": "20.19.5",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ask-production-fc5b.up.railway.app",
+        "EXPO_PUBLIC_PLACES_PROVIDER": "photon",
+        "EXPO_PUBLIC_PRIVY_APP_ID": "cmssibsot02kh0bl4ywfb92ct",
+        "EXPO_PUBLIC_PRIVY_CLIENT_ID": "client-WY6cEiJ7m2RwCxC178WKe7ithEugxMefHvUov2g8RQeaH",
+        "EXPO_PUBLIC_ESCROW_ADDRESS": "0x8f93ac1d48f219922cCe1c83AF4c4F718cEB8681"
+      }
+    },
+    "production-apk": {
+      "extends": "production",
+      "distribution": "internal",
+      "autoIncrement": false,
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {
