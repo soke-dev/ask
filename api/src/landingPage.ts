@@ -293,17 +293,6 @@ export function landingPage(origin: string): string {
     .phone { margin:0 auto; }
   }
 
-  /* ── The band under the hero ──────────────────────────────────────── */
-  .band {
-    display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
-    border:2px solid var(--line); border-radius:2px; background:var(--sunken); margin-top:54px;
-  }
-  .band div { padding:18px 20px; border-right:1px solid var(--line); }
-  .band div:last-child { border-right:0; }
-  .band b { display:block; font-size:19px; font-weight:800; letter-spacing:-.4px; }
-  .band span { font-size:13px; color:var(--faint); }
-  @media (max-width:640px) { .band div { border-right:0; border-bottom:1px solid var(--line); } }
-
   /* ── Sections ─────────────────────────────────────────────────────── */
   section { padding:74px 0 0; margin-top:26px; }
   .kicker {
@@ -453,13 +442,6 @@ export function landingPage(origin: string): string {
                alt="The Confam home screen, asking what you need checked right now, above a list of questions confirmed nearby">
         </div>
       </div>
-    </div>
-
-    <div class="band">
-      <div><b>&#8358;150</b><span>the smallest bounty</span></div>
-      <div><b>USDC on Base</b><span>escrow, not an IOU</span></div>
-      <div><b>Minutes</b><span>not next business day</span></div>
-      <div><b>Every answer</b><span>has a proof page</span></div>
     </div>
   </div>
 
