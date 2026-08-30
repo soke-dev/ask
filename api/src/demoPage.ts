@@ -59,6 +59,12 @@ export const DEMO_PAGE = `<!doctype html>
   .plate:hover img { outline:2px solid var(--accent); outline-offset:1px; }
   .bar b { color:var(--accent); font-weight:700; letter-spacing:.5px; }
   .bar .right { margin-left:auto; color:var(--faint); }
+  .barbtn {
+    background:transparent; border:1px solid var(--line); color:var(--dim);
+    font:inherit; font-size:11px; padding:2px 8px; cursor:pointer;
+    border-radius:2px; margin-left:10px; flex:none;
+  }
+  .barbtn:hover { border-color:var(--accent); color:var(--accent); }
 
   .log { flex:1; overflow-y:auto; padding:16px 14px 10px; scrollbar-width:thin; }
   .log::-webkit-scrollbar { width:8px; }
@@ -122,6 +128,7 @@ export const DEMO_PAGE = `<!doctype html>
     <span class="dot"></span>
     <span>the physical world, on demand</span>
     <span class="right" id="budget"></span>
+    <button class="barbtn" id="clear" title="clear the screen">clear</button>
   </div>
 
   <div class="log" id="log"></div>
@@ -286,6 +293,12 @@ box.addEventListener('focus', showSuggestions);
 box.addEventListener('input', showSuggestions);
 box.addEventListener('blur', () => setTimeout(hideSuggestions, 120));
 
+document.getElementById('clear').onclick = () => {
+  log.innerHTML = '';
+  banner();
+  prompt('question');
+};
+
 document.querySelectorAll('.hints button').forEach(b => {
   b.onclick = () => { box.value = b.dataset.c; submit(); };
 });
@@ -317,8 +330,20 @@ async function submit() {
   if (!text) return;
   box.value = '';
 
+  /*
+   * A command is a command wherever it is typed.
+   *
+   * They were only intercepted at the question prompt, so answering "where?"
+   * with /jobs created a job whose place was literally "/jobs" — and spent
+   * money doing it. Anything starting with a slash is never a place.
+   */
+  if (text[0] === '/') {
+    say('<i>' + esc(ps1.textContent) + '</i> ' + esc(text), 'you');
+    if (step !== 'question') prompt('question');
+    return command(text);
+  }
+
   if (step === 'question') {
-    if (text[0] === '/') { say('<i>&gt;</i> ' + esc(text), 'you'); return command(text); }
     pending = text;
     say('<i>&gt;</i> ' + esc(text), 'you');
     prompt('place');
@@ -548,8 +573,32 @@ function docs() {
   const K = '<span class="gutter">  </span>';
 
   say('CONNECT YOUR AGENT', 'ok');
-  say(K + '1. run /key and sign with your wallet. no email, no gas.');
-  say(K + '2. send the key as: Authorization: Bearer sk_confam_...');
+  say(K + 'Nothing here needs this page. It is one discovery call and two to');
+  say(K + 'get a key, all of which a program can do on its own.');
+  say('');
+  say(K + 'GET ' + base + '/agent', 'go');
+  say(K + 'returns ready-made confam_ask and confam_result tool definitions,');
+  say(K + 'the auth steps, the limits and the proof url. drop the tools');
+  say(K + 'straight into your model call.');
+  say('');
+  say(K + 'Then mint a key. No browser: signing a message is something your', 'sys');
+  say(K + 'agent does with its own key. window.ethereum is only the human', 'sys');
+  say(K + 'route to the same signature.', 'sys');
+  say('');
+  say(K + 'POST ' + base + '/agent/keys/challenge   {"address":"0x..."}', 'go');
+  say(K + '  -> { "message": "Confam - create an API key ..." }');
+  say(K + 'sign that message (personal_sign / EIP-191), then', 'go');
+  say(K + 'POST ' + base + '/agent/keys/wallet      {"address":"0x...","signature":"0x..."}');
+  say(K + '  -> { "token": "sk_confam_..." }');
+  say('');
+  say(K + 'viem:   await account.signMessage({ message })');
+  say(K + 'ethers: await wallet.signMessage(message)');
+  say('');
+  say(K + 'send it as: Authorization: Bearer sk_confam_...');
+  say(K + 'the key is bound to that address, which is also the wallet you');
+  say(K + 'would fund your own jobs from.');
+  say('');
+  say(K + 'or run /key here and let the browser sign it for you.', 'dim');
   say('');
 
   say('ASK A QUESTION', 'go');
