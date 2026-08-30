@@ -245,7 +245,7 @@ export function landingPage(origin: string): string {
   .btn {
     display:flex; align-items:center; gap:11px; text-decoration:none;
     border:2px solid var(--line-strong); border-radius:2px;
-    padding:12px 20px; color:var(--fg); background:var(--surface); min-width:196px;
+    padding:11px 17px; color:var(--fg); background:var(--surface);
   }
   .btn .txt { display:flex; flex-direction:column; gap:1px; }
   .btn b { font-size:15px; font-weight:700; }
@@ -399,8 +399,8 @@ export function landingPage(origin: string): string {
     <img src="${LOGO_DATA_URI}" alt="Confam">
     <span class="word">CONFAM<em>AI</em></span>
     <nav>
-      <a href="#how">How it works</a>
       <a href="#ai">Confam AI</a>
+      <a href="#how">How it works</a>
       <a href="#proof">Proof</a>
       <a href="#faq">Questions</a>
       <a class="cta" href="#get">Get the app</a>
@@ -444,36 +444,6 @@ export function landingPage(origin: string): string {
       </div>
     </div>
   </div>
-
-  <section id="how">
-    <p class="kicker">How it works</p>
-    <h2>Four steps, and only one of them is yours.</h2>
-    <div class="grid">
-      <div class="card">
-        <div class="top">${icon('ask')}<span class="n">01</span></div>
-        <b>You ask about a place</b>
-        <p>A question and the spot it is about. Asking costs nothing.</p>
-      </div>
-      <div class="card">
-        <div class="top">${icon('ai')}<span class="n">02</span></div>
-        <b>Confam AI checks what is known</b>
-        <p>If somebody verified that place recently and it still holds, you get it straight away
-           with what they brought back, and you can tip them for it.</p>
-      </div>
-      <div class="card">
-        <div class="top">${icon('place')}<span class="n">03</span></div>
-        <b>Otherwise somebody goes</b>
-        <p>You set what you will pay and how long they have. Whoever takes it first walks there
-           in person.</p>
-      </div>
-      <div class="card">
-        <div class="top">${icon('check')}<span class="n">04</span></div>
-        <b>You decide</b>
-        <p>Photo or video comes back with the time and how far from the place it was taken.
-           Confirm it and they are paid.</p>
-      </div>
-    </div>
-  </section>
 
   <section id="ai">
     <p class="kicker">Confam AI</p>
@@ -541,6 +511,36 @@ export function landingPage(origin: string): string {
         whatever your agent uses. An answer nobody polls within fifteen minutes is accepted for
         you, so somebody who walked there is never left waiting on a program that stopped calling.
       </p>
+    </div>
+  </section>
+
+  <section id="how">
+    <p class="kicker">How it works</p>
+    <h2>Four steps, and only one of them is yours.</h2>
+    <div class="grid">
+      <div class="card">
+        <div class="top">${icon('ask')}<span class="n">01</span></div>
+        <b>You ask about a place</b>
+        <p>A question and the spot it is about. Asking costs nothing.</p>
+      </div>
+      <div class="card">
+        <div class="top">${icon('ai')}<span class="n">02</span></div>
+        <b>Confam AI checks what is known</b>
+        <p>If somebody verified that place recently and it still holds, you get it straight away
+           with what they brought back, and you can tip them for it.</p>
+      </div>
+      <div class="card">
+        <div class="top">${icon('place')}<span class="n">03</span></div>
+        <b>Otherwise somebody goes</b>
+        <p>You set what you will pay and how long they have. Whoever takes it first walks there
+           in person.</p>
+      </div>
+      <div class="card">
+        <div class="top">${icon('check')}<span class="n">04</span></div>
+        <b>You decide</b>
+        <p>Photo or video comes back with the time and how far from the place it was taken.
+           Confirm it and they are paid.</p>
+      </div>
     </div>
   </section>
 
@@ -651,8 +651,8 @@ export function landingPage(origin: string): string {
       <div>
         <h4>Product</h4>
         <ul>
-          <li><a href="#how">How it works</a></li>
           <li><a href="#ai">Confam AI</a></li>
+          <li><a href="#how">How it works</a></li>
           <li><a href="${esc(origin)}/confamagent">Agent terminal</a></li>
           <li><a href="${esc(origin)}/agent">Tool definitions</a></li>
         </ul>
