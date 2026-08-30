@@ -156,9 +156,9 @@ export function landingPage(origin: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Confam — the physical world, on demand</title>
-<meta name="description" content="Ask about any place in Nigeria. Confam answers from evidence somebody already verified, or pays a person nearby to walk there and photograph it.">
+<meta name="description" content="Ask about any place in Nigeria. Confam answers from evidence somebody already verified, or pays a person nearby to walk there and send back a photo or a video.">
 <meta property="og:title" content="Confam — the physical world, on demand">
-<meta property="og:description" content="Somebody already standing there goes and looks, and sends back the photograph.">
+<meta property="og:description" content="Somebody already standing there goes and looks, and sends back the photo or the video.">
 <link rel="icon" href="${LOGO_DATA_URI}">
 <style>
   :root {
@@ -373,6 +373,11 @@ export function landingPage(origin: string): string {
        thing it is there to show. */
     white-space:pre-wrap;
   }
+  .howto { margin-top:34px; }
+  .howto h4 { font-size:16.5px; font-weight:800; letter-spacing:-.3px; margin:0 0 12px; }
+  .howto .note {
+    color:var(--faint); font-size:13.5px; line-height:1.6; max-width:680px; margin:12px 0 0;
+  }
   .term .p { color:var(--accent); }
   .term .g { color:var(--ok); }
   .term .d { color:var(--faint); }
@@ -456,7 +461,7 @@ export function landingPage(origin: string): string {
         <h1>The physical world,<span>on demand.</span></h1>
         <p class="lede">
           Some things cannot be looked up. Confam pays somebody already standing there to go and
-          look, and sends back the photograph.
+          look, and sends back the photo or the video.
         </p>
         <p class="asks">
           Is the road flooded? <span>&middot;</span> Is the queue long? <span>&middot;</span>
@@ -527,7 +532,7 @@ export function landingPage(origin: string): string {
         <div class="top">${icon('ai')}<span class="n">02</span></div>
         <b>Confam AI checks what is known</b>
         <p>If somebody verified that place recently and it still holds, you get it straight away
-           with their photograph, and you can tip them for it.</p>
+           with what they brought back, and you can tip them for it.</p>
       </div>
       <div class="card">
         <div class="top">${icon('place')}<span class="n">03</span></div>
@@ -555,7 +560,8 @@ export function landingPage(origin: string): string {
         </p>
         <p class="body">
           It never answers from its own knowledge. Everything it gives you came from a person who
-          stood there, so a wrong answer is a wrong photograph rather than a confident guess.
+          stood there, so a wrong answer is somebody's mistake at a real place rather than a
+          confident guess.
         </p>
         <p class="body">
           Programs can use it too. An agent gets a key, asks questions, and pays the person who
@@ -578,6 +584,38 @@ export function landingPage(origin: string): string {
   <span class="d">verify on Base &rarr;</span>
       </div>
     </div>
+
+    <div class="howto">
+      <h4>Point your own agent at it</h4>
+      <div class="term">
+<span class="d"># 1. get a key. in the app: You, then Confam AI, then Create a key</span>
+
+<span class="d"># 2. ask. finding somebody and paying them is handled for you</span>
+<span class="p">POST</span> ${esc(origin)}/agent/ask
+     Authorization: Bearer sk_confam_...
+     { "question": "Is the gate open?", "place": "Apapa", "bountyNgn": 150 }
+
+     <span class="d">-&gt; { "status": "dispatched", "id": "8f2c...", "costNgn": 150 }</span>
+     <span class="g">-&gt; { "status": "answered", "source": "cached" }</span> <span class="d">if somebody already went</span>
+
+<span class="d"># 3. poll until somebody has been</span>
+<span class="p">GET</span>  ${esc(origin)}/agent/ask/&lt;id&gt;
+
+     <span class="g">-&gt; { "status": "answered", "answer": "Yes, the gate is open.",</span>
+     <span class="g">     "evidence": ["/media/..."], "evidenceKind": "video",</span>
+     <span class="g">     "metresFromPlace": 34, "verifier": "musa" }</span>
+
+<span class="d"># 4. accept, and the person who walked there is paid</span>
+<span class="p">POST</span> ${esc(origin)}/agent/ask/&lt;id&gt;/accept
+
+     <span class="d">-&gt; { "ok": true, "paidNgn": 135, "chain": { "txHash": "0x..." } }</span>
+      </div>
+      <p class="note">
+        The tool definitions are at <a href="${esc(origin)}/agent">/agent</a>, ready to paste into
+        whatever your agent uses. An answer nobody polls within fifteen minutes is accepted for
+        you, so somebody who walked there is never left waiting on a program that stopped calling.
+      </p>
+    </div>
   </section>
 
   <section id="proof">
@@ -593,14 +631,14 @@ export function landingPage(origin: string): string {
       <div class="card">
         <div class="top">${icon('hash')}</div>
         <b>The evidence is committed</b>
-        <p>A hash of every photograph is written to Base and signed by the verifier, so it can be
-           proved the file was not swapped afterwards.</p>
+        <p>A hash of every photo and video is written to Base and signed by the verifier, so it
+           can be proved the file was not swapped afterwards.</p>
       </div>
       <div class="card">
         <div class="top">${icon('shield')}</div>
         <b>Check it yourself</b>
         <p>Every answer has a proof page: the hashes, the escrow, and every transaction. Hash the
-           photo yourself and compare. Our servers are not in the path.</p>
+           file yourself and compare. Our servers are not in the path.</p>
       </div>
     </div>
   </section>
@@ -614,16 +652,16 @@ export function landingPage(origin: string): string {
     <div class="faq">
       ${faq(
         'What is Confam?',
-        'You ask about a place. Somebody already near it goes, photographs it, and you pay them ' +
-          'for the trip. It answers the questions a search engine cannot, because they are about ' +
-          'right now rather than about last year.',
+        'You ask about a place. Somebody already near it goes, photographs or films it, and you ' +
+          'pay them for the trip. It answers the questions a search engine cannot, because they ' +
+          'are about right now rather than about last year.',
       )}
       ${faq(
         'How do I know the answer is real?',
-        'Every photograph arrives with the time it was taken and how far from the place it was ' +
-          'taken, and a hash of the file is written to Base and signed by the person who took ' +
-          'it. If the file changed afterwards the hash stops matching, and anybody can check ' +
-          'that without asking us.',
+        'Every photo and video arrives with the time it was taken and how far from the place it ' +
+          'was taken, and a hash of the file is written to Base and signed by the person who ' +
+          'took it. If the file changed afterwards the hash stops matching, and anybody can ' +
+          'check that without asking us.',
       )}
       ${faq(
         'What does it cost?',
@@ -640,7 +678,7 @@ export function landingPage(origin: string): string {
         'What is Confam AI?',
         'The agent that reads your question first and decides whether anybody has to walk. If a ' +
           'recent verified answer already covers it you get that instead, in seconds, and you ' +
-          'can tip the person whose photograph it was. It never invents an answer.',
+          'can tip the person who went. It never invents an answer.',
       )}
       ${faq(
         'Can my own program use it?',
