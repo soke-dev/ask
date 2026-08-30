@@ -168,13 +168,13 @@ export default function SignInScreen() {
           </Text>
 
           {/*
-            * Three lines, and the last one is the turn.
+            * Two lines. The questions, then everything else.
             *
-            * There were four, evenly spaced, which read as a list of unrelated
-            * claims rather than one idea. The questions go first because
+            * This was four evenly spaced statements, then three, and both read
+            * as a list rather than one idea. The questions go first because
             * recognising one you have wanted answered explains this faster
-            * than any description; then how it is answered; then the part
-            * nobody expects.
+            * than any description can; the rest is a single sentence about who
+            * answers and one clause about why it can be trusted.
             *
             * The chain is mentioned as proof rather than as payment. What
             * somebody signing up cares about is whether an answer can be
@@ -185,10 +185,8 @@ export default function SignInScreen() {
               Is the road flooded? Is the queue long? Is the shop open?
             </Text>
             <Text style={[text.body, { color: colors.mutedForeground, marginTop: 8 }]}>
-              Confam AI answers what is already known. Otherwise somebody nearby goes and looks.
-            </Text>
-            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 8 }]}>
-              Machines ask it too, and every answer is proved on chain.
+              Confam AI answers what is known, or somebody nearby goes and looks. Machines ask
+              too, all proved on chain.
             </Text>
           </View>
 
