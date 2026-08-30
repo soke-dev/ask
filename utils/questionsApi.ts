@@ -284,6 +284,34 @@ export const tipForAnswer = (questionId: string, amountNgn: number) =>
     { method: 'POST', body: JSON.stringify({ amountNgn }) },
   );
 
+/**
+ * Keys that let a program act as you.
+ *
+ * The routes have existed since the agent surface was built and nothing in the
+ * app ever called them, so the only way to get a key was a wallet signature on
+ * the web page. Somebody already signed in here should not have to go
+ * somewhere else and prove who they are a second time.
+ */
+export type AgentKey = {
+  id: string;
+  name: string;
+  hint: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+};
+
+export const listAgentKeys = () => apiFetch<{ keys: AgentKey[] }>('/agent/keys');
+
+export const createAgentKey = (name: string) =>
+  apiFetch<{ id: string; name: string; token: string; warning: string }>('/agent/keys', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+
+export const revokeAgentKey = (id: string) =>
+  apiFetch<{ ok: true }>(`/agent/keys/${id}`, { method: 'DELETE' });
+
 export { hasApi, toNaira };
 
 /** Records a query against an answer, so a reviewer can see it. */

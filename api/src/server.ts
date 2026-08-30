@@ -15,6 +15,7 @@ import { pushRouter } from './routes/push.js';
 import { escrowRouter } from './routes/escrow.js';
 import { storageIsEphemeral, storageIsLocal } from './storage.js';
 import { agentAddress, hasAgentWallet } from './agentWallet.js';
+import { startAgentSettlement } from './agentSettle.js';
 import { attachRealtime, realtimeStatus } from './realtime.js';
 import { chainStatus } from './chain.js';
 import { relayerStatus } from './relayer.js';
@@ -146,6 +147,15 @@ const server = app.listen(config.port, () => {
   if (!hasVision()) console.log('  OPENAI_API_KEY unset — relevance check will be skipped');
   if (storageIsEphemeral) console.log('  disk storage — development only, files are lost on deploy');
   if (config.storageDriver === 'volume') console.log(`  volume storage at ${config.storageDir}`);
+
+  /**
+   * Verifiers whose asker was a program that never came back get paid anyway.
+   *
+   * An agent may poll once and never call accept, or be a key that no longer
+   * exists. The evidence is in, the money is in escrow, and without this the
+   * person who walked there waits for a decision nobody will make.
+   */
+  startAgentSettlement();
 });
 
 // Shares the HTTP server, so realtime needs no second port and no second

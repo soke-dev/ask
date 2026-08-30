@@ -9,7 +9,7 @@ import { storage } from '../storage.js';
 import { ago, knownFor, triage } from '../agentTriage.js';
 import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 import { notify, nearbyVerifiers } from '../push.js';
-import { fundAsAgent } from '../agentWallet.js';
+import { fundAsAgent, releaseAsAgent } from '../agentWallet.js';
 
 export const agentRouter: Router = Router();
 
@@ -735,6 +735,161 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
       });
     }
   })();
+});
+
+/**
+ * Accept the answer and pay for it.
+ *
+ * An agent that could fund a job and dispatch somebody but never settle would
+ * be worse than one that could not dispatch at all: the verifier walks, the
+ * evidence arrives, and the money sits in escrow with nobody able to move it.
+ * The asker decides when work is accepted, and for an agent's job the agent is
+ * the asker.
+ *
+ * Two steps that must both happen. The ledger records the earning, and the
+ * escrow pays out on chain. Reported separately, because the second can fail
+ * while the first stands, and a verifier owed money on the ledger with nothing
+ * released is a state somebody has to be able to see.
+ */
+agentRouter.post('/ask/:id/accept', authenticateAgent, async (req, res) => {
+  const job = await one<{
+    taskId: string;
+    verifierId: string;
+    bountyKobo: number;
+    taskStatus: string;
+    verifier: string | null;
+  }>(
+    `SELECT t.id AS "taskId", t.verifier_id AS "verifierId",
+            q.bounty_kobo AS "bountyKobo", t.status::text AS "taskStatus",
+            p.username AS verifier
+       FROM questions q
+       JOIN tasks t ON t.question_id = q.id
+       LEFT JOIN profiles p ON p.user_id = t.verifier_id
+      WHERE q.id = $1 AND q.asker_id = $2`,
+    [req.params.id, req.user!.id],
+  );
+
+  if (!job) {
+    res.status(404).json({ error: 'not_found', detail: 'Not your job, or nobody took it.' });
+    return;
+  }
+  if (job.taskStatus === 'confirmed') {
+    res.json({ ok: true, already: true });
+    return;
+  }
+  if (job.taskStatus !== 'submitted') {
+    res.status(409).json({ error: 'nothing_submitted', detail: 'No answer has come back yet.' });
+    return;
+  }
+
+  /**
+   * Written exactly as the app's own confirm writes it: the whole bounty as an
+   * earning, the platform's cut as a separate fee against the same person. Two
+   * ways of recording one payment would eventually disagree, and the ledger is
+   * what decides who was actually paid.
+   */
+  const feeKobo = Math.round(job.bountyKobo * 0.1);
+  const payoutKobo = job.bountyKobo - feeKobo;
+  // The route cannot match without it, but the type does not know that.
+  const questionId = String(req.params.id);
+
+  await transaction(async (client) => {
+    await client.query(
+      `UPDATE tasks SET status = 'confirmed', completed_at = now() WHERE id = $1`,
+      [job.taskId],
+    );
+    await client.query(`UPDATE questions SET closed_at = now() WHERE id = $1`, [questionId]);
+    await client.query(
+      `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
+       VALUES ($1, 'earning', $2, $3, 'Answer accepted by an agent')`,
+      [job.verifierId, job.bountyKobo, questionId],
+    );
+    await client.query(
+      `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
+       VALUES ($1, 'fee', $2, $3, 'Platform fee')`,
+      [job.verifierId, feeKobo, questionId],
+    );
+  });
+
+  const released = await releaseAsAgent(questionId);
+
+  res.json({
+    ok: true,
+    verifier: job.verifier,
+    paidNgn: payoutKobo / 100,
+    feeNgn: feeKobo / 100,
+    chain: released.ok
+      ? { released: true, txHash: released.txHash }
+      : { released: false, why: released.reason },
+  });
+
+  void notify({
+    userId: job.verifierId,
+    kind: 'payment',
+    title: 'You were paid',
+    body: `An agent accepted your answer. ₦${Math.round(payoutKobo / 100)} is yours.`,
+    href: '/(tabs)/you',
+  });
+});
+
+/**
+ * Query the answer instead of accepting it.
+ *
+ * The same route the app uses, reached with a key. A reason is required for the
+ * reason it is required there: "wrong" is not something a reviewer can rule on,
+ * and the verifier is entitled to know what is being disputed.
+ *
+ * Nothing is released and nothing is refunded here. The bounty stays in escrow
+ * until somebody rules, which is the only arrangement where both sides can
+ * afford to be wrong.
+ */
+agentRouter.post('/ask/:id/query', authenticateAgent, async (req, res) => {
+  const reason = String((req.body as { reason?: unknown }).reason ?? '').trim();
+  if (reason.length < 10) {
+    res.status(400).json({
+      error: 'reason_too_short',
+      detail: 'Say what is wrong with it. A reviewer has to judge on this.',
+    });
+    return;
+  }
+
+  const job = await one<{ taskId: string | null; verifierId: string | null; body: string }>(
+    `SELECT t.id AS "taskId", t.verifier_id AS "verifierId", q.body
+       FROM questions q
+       LEFT JOIN tasks t ON t.question_id = q.id
+      WHERE q.id = $1 AND q.asker_id = $2`,
+    [req.params.id, req.user!.id],
+  );
+  if (!job?.taskId) {
+    res.status(404).json({ error: 'not_found' });
+    return;
+  }
+
+  const created = await transaction(async (client) => {
+    const row = await client.query<{ id: string }>(
+      `INSERT INTO disputes (question_id, task_id, asker_reason)
+       VALUES ($1, $2, $3) ON CONFLICT (question_id) DO NOTHING RETURNING id`,
+      [req.params.id, job.taskId, reason.slice(0, 2000)],
+    );
+    await client.query(`UPDATE tasks SET status = 'disputed' WHERE id = $1`, [job.taskId]);
+    return row.rows[0]?.id ?? null;
+  });
+
+  if (!created) {
+    res.status(409).json({ error: 'already_queried' });
+    return;
+  }
+  res.status(201).json({ ok: true, id: created, status: 'awaiting_verifier' });
+
+  if (job.verifierId) {
+    void notify({
+      userId: job.verifierId,
+      kind: 'dispute',
+      title: 'Your answer was queried',
+      body: `${job.body.slice(0, 60)} — say what you saw and a reviewer decides.`,
+      href: '/disputes',
+    });
+  }
 });
 
 /**

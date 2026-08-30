@@ -50,10 +50,11 @@ const THEME_OPTIONS: { value: ThemeMode; label: string; icon: keyof typeof Ionic
 const SETTINGS: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
-  href: '/edit-profile' | '/alerts' | '/privacy' | '/help' | '/about';
+  href: '/edit-profile' | '/alerts' | '/agent' | '/privacy' | '/help' | '/about';
 }[] = [
   { icon: 'person-circle-outline', label: 'Edit profile', href: '/edit-profile' },
   { icon: 'notifications-outline', label: 'Alerts', href: '/alerts' },
+  { icon: 'terminal-outline', label: 'Confam AI', href: '/agent' },
   { icon: 'lock-closed-outline', label: 'Privacy & security', href: '/privacy' },
   { icon: 'chatbubble-ellipses-outline', label: 'Get help', href: '/help' },
   { icon: 'information-circle-outline', label: 'About Confam', href: '/about' },

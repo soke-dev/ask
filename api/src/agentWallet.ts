@@ -2,7 +2,15 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { config, hasEscrow } from './config.js';
 import { one, query } from './db.js';
 import { ngnRate } from './rates.js';
-import { fundPayload, jobIdFor, randomSalt, readJob, relayFund } from './escrow.js';
+import {
+  fundPayload,
+  jobIdFor,
+  randomSalt,
+  readJob,
+  relayFund,
+  relayRelease,
+  releasePayload,
+} from './escrow.js';
 
 /**
  * The agent's own wallet, and the money that leaves it.
@@ -158,4 +166,69 @@ export async function fundAsAgent(questionId: string, bountyKobo: number): Promi
    */
   console.warn('[agent] could not fund on chain after 3 tries —', lastError);
   return { ok: false, reason: lastError.slice(0, 200) };
+}
+
+/**
+ * Pays the verifier, on the agent's say-so.
+ *
+ * The asker decides when work is accepted, and for an agent's job the agent is
+ * the asker — so the signature the contract wants is one only this wallet can
+ * produce. Without it an agent could fund a job and dispatch somebody and then
+ * have no way to pay them, which is a worse position than not being able to
+ * dispatch at all.
+ *
+ * Same shape as funding: sign here, relay through the gas wallet, and report
+ * rather than throw. A release that fails leaves the money in escrow, which is
+ * recoverable; pretending it succeeded is not.
+ */
+export async function releaseAsAgent(questionId: string): Promise<FundResult> {
+  if (!hasEscrow()) return { ok: false, reason: 'no_escrow_configured' };
+
+  const key = config.chain.agentWalletKey;
+  if (!agentAddress()) return { ok: false, reason: 'no_agent_wallet' };
+
+  const job = await one<{ chainJobId: string | null; verifierWallet: string | null }>(
+    `SELECT q.chain_job_id AS "chainJobId", u.wallet_address AS "verifierWallet"
+       FROM questions q
+       LEFT JOIN tasks t ON t.question_id = q.id
+       LEFT JOIN users u ON u.id = t.verifier_id
+      WHERE q.id = $1`,
+    [questionId],
+  );
+
+  if (!job?.chainJobId) return { ok: false, reason: 'not_funded' };
+  if (!job.verifierWallet) return { ok: false, reason: 'no_verifier' };
+
+  const jobId = job.chainJobId as `0x${string}`;
+
+  /**
+   * Asked before signing, because a job already released is not a failure.
+   *
+   * The commonest way this is reached twice is a retry after a dropped
+   * response, and reporting that as an error would send somebody looking for a
+   * problem that has already resolved itself.
+   */
+  const onChain = await readJob(jobId).catch(() => null);
+  if (onChain && onChain.status === 'released') {
+    return { ok: true, txHash: 'already_released', jobId, usdc: 0 };
+  }
+
+  try {
+    const account = privateKeyToAccount(key as `0x${string}`);
+    const signature = await account.signTypedData(
+      releasePayload(jobId, job.verifierWallet) as never,
+    );
+    const result = await relayRelease(jobId, signature);
+
+    await query(`UPDATE questions SET release_tx = COALESCE(release_tx, $2) WHERE id = $1`, [
+      questionId,
+      result.txHash,
+    ]);
+
+    return { ok: true, txHash: result.txHash, jobId, usdc: 0 };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn('[agent] could not release —', detail);
+    return { ok: false, reason: detail.slice(0, 200) };
+  }
 }
