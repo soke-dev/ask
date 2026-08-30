@@ -1,6 +1,7 @@
 import { keccak256, toHex } from 'viem';
 import { combineHashes } from '../evidenceHash.js';
 import { storage } from '../storage.js';
+import { proofPage } from '../proofPage.js';
 import { Router } from 'express';
 import { authenticate } from '../auth.js';
 import { authenticateEither } from '../agentAuth.js';
@@ -341,7 +342,7 @@ escrowRouter.get('/:questionId/proof', async (req, res) => {
 
   const hashes = files.map((f) => f.hash).filter((h): h is string => Boolean(h));
 
-  res.json({
+  const view = {
     question: q.body,
     place: q.place,
     chain: {
@@ -384,7 +385,27 @@ escrowRouter.get('/:questionId/proof', async (req, res) => {
       'Compare with evidenceHash in the Claimed event for this jobId on Base.',
     ],
     unverifiable: hashes.length === 0 ? 'This was submitted before evidence was hashed at upload.' : null,
-  });
+  };
+
+  /**
+   * The same facts, in the shape the caller can use.
+   *
+   * A browser asking for HTML gets a page; an agent gets the JSON it was
+   * always getting. This endpoint was built for machines and returned hex to
+   * anybody who clicked a link labelled "proof", which is the one audience
+   * that cannot do anything with it.
+   *
+   * ?format=json overrides, for looking at the raw shape from a browser.
+   */
+  const wantsJson =
+    req.query.format === 'json' || !req.accepts('html');
+
+  if (wantsJson) {
+    res.json(view);
+    return;
+  }
+
+  res.type('html').send(proofPage(view, `${req.protocol}://${req.get('host')}`));
 });
 
 escrowRouter.post('/:questionId/claim/quote', authenticate, async (req, res) => {
