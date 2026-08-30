@@ -9,14 +9,37 @@
  *
  * So there is one source, constants/legal.ts, and this generates the other at
  * build time. Editing the generated file is pointless; the next build wins.
+ *
+ * The generated file is committed, which looks redundant and is not. The
+ * deployed API is built from the api directory alone, so constants/legal.ts is
+ * not there to read: this script ran in production, could not find the source
+ * one directory above the world it could see, and failed every deploy for five
+ * hours without anybody noticing, because a build log defaults to showing the
+ * last build that worked.
+ *
+ * So when the source is absent this steps aside and the committed copy stands.
+ * When it is absent and there is no committed copy either, it still fails,
+ * because an API serving no privacy policy is worse than one that will not
+ * start.
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = join(here, '..', '..', 'constants', 'legal.ts');
 const target = join(here, '..', 'src', 'legalText.generated.ts');
+
+if (!existsSync(source)) {
+  if (!existsSync(target)) {
+    throw new Error(
+      'sync-legal: no ' + source + ' and no generated copy at ' + target + '. ' +
+        'Run this from a full checkout once and commit the result.',
+    );
+  }
+  console.log('sync-legal: no app source here, keeping the committed copy');
+  process.exit(0);
+}
 
 const src = readFileSync(source, 'utf8');
 

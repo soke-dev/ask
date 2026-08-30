@@ -3,4 +3,4 @@ dist/
 .env
 .uploads/
 
-src/legalText.generated.ts
+# src/legalText.generated.ts is committed on purpose: see scripts/sync-legal.mjs
