@@ -162,6 +162,7 @@ function RootLayoutNav() {
         <Stack.Screen name="activity" options={{ headerShown: false }} />
         <Stack.Screen name="edit-profile" options={{ headerShown: false }} />
         <Stack.Screen name="alerts" options={{ headerShown: false }} />
+        <Stack.Screen name="agent" options={{ headerShown: false }} />
         <Stack.Screen name="privacy" options={{ headerShown: false }} />
         <Stack.Screen name="help" options={{ headerShown: false }} />
         <Stack.Screen name="about" options={{ headerShown: false }} />
