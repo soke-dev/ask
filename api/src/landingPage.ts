@@ -1,5 +1,6 @@
 import { LOGO_DATA_URI } from './logo.js';
 import { config } from './config.js';
+import { APP_SHOT_DATA_URI, APP_SHOT_BG, APP_SHOT_SIZE } from './appShot.js';
 
 /**
  * The front door.
@@ -12,9 +13,10 @@ import { config } from './config.js';
  * The design follows the app rather than inventing a second identity: square
  * corners, 2px edges, uppercase tracked labels, one orange. Somebody who sees
  * this and then opens the app should not have to work out that they are the
- * same product. The phone in the hero is drawn in CSS for the same reason a
- * screenshot would have been worse: a screenshot is out of date the first time
- * a screen changes, and nobody ever remembers to retake it.
+ * same product. The phone in the hero holds a real screenshot rather than a
+ * drawing of one, because somebody deciding whether to install this is
+ * entitled to see the thing they would be installing. It goes stale when the
+ * home screen changes, which is what "npm run shot" is for.
  *
  * No framework, no CDN, no backslashes. The same rules as the terminal, for
  * the same reasons.
@@ -167,6 +169,7 @@ export function landingPage(origin: string): string {
     --fg:#FAFAFA; --muted:#9C9C9C; --faint:#5F5F5F;
     --accent:#FF6B00; --ok:#3DD68C;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --shot: ${APP_SHOT_BG};
   }
   * { box-sizing:border-box; }
   * { scrollbar-width: thin; scrollbar-color: #2A2A2A transparent; }
@@ -270,57 +273,21 @@ export function landingPage(origin: string): string {
     width:88px; height:20px; background:#000; border-radius:12px; z-index:3;
   }
   .screen {
-    background:var(--bg); border-radius:32px; overflow:hidden;
-    display:flex; flex-direction:column; height:566px;
+    background:var(--shot); border-radius:32px; overflow:hidden;
+    display:flex; flex-direction:column;
   }
+  /*
+   * A strip of phone above the app, so the island has somewhere to sit that
+   * is not on top of the header in the screenshot. Its height is not fixed to
+   * the picture: the screen takes whatever height the image comes with, so a
+   * retaken screenshot of a different size still fits its frame.
+   */
   .sbar {
     display:flex; justify-content:space-between; align-items:center;
-    padding:13px 20px 8px; font-size:11px; font-weight:700;
+    padding:14px 20px 10px; font-size:11px; font-weight:700; color:var(--fg);
   }
   .sbar em { font-style:normal; letter-spacing:1px; color:var(--muted); }
-  .abar {
-    display:flex; align-items:center; gap:8px; padding:12px 15px;
-    border-bottom:1px solid var(--line);
-  }
-  .abar img { width:19px; height:19px; border-radius:4px; }
-  .abar b { font-size:12px; letter-spacing:1.3px; font-weight:800; }
-  .abar b em { font-style:normal; color:var(--accent); }
-  .abar .bell { margin-left:auto; width:7px; height:7px; border-radius:50%; background:var(--accent); }
-  .feed { flex:1; padding:13px 13px 0; display:flex; flex-direction:column; gap:11px; overflow:hidden; }
-  .q { border:2px solid var(--line); border-radius:2px; background:var(--surface); padding:12px; }
-  .q .qh { font-size:13.5px; font-weight:700; line-height:1.35; }
-  .q .qm { font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-top:5px; }
-  /*
-   * The photograph. Not an image file: two gradients that read as wet tarmac
-   * at a glance and never pretend to be evidence of anything.
-   */
-  .shot {
-    position:relative; height:86px; margin:10px 0 9px; border-radius:2px; overflow:hidden;
-    background:
-      radial-gradient(80% 50% at 30% 12%, rgba(255,150,60,.28), transparent 62%),
-      linear-gradient(178deg,#241A12 0%,#171310 42%,#2B2620 43%,#14100D 100%);
-  }
-  .shot .chip {
-    position:absolute; left:8px; bottom:8px; background:rgba(10,10,10,.78);
-    border:1px solid var(--ok); color:var(--ok); border-radius:2px;
-    font-family:var(--mono); font-size:9px; letter-spacing:1px; padding:2px 6px;
-  }
-  .q .said { font-size:12.5px; line-height:1.45; }
-  .take {
-    margin-top:10px; text-align:center; border:2px solid var(--accent); color:var(--accent);
-    border-radius:2px; padding:7px; font-size:12px; font-weight:700;
-  }
-  .tabs {
-    display:flex; align-items:center; justify-content:space-around;
-    border-top:1px solid var(--line); padding:11px 8px 20px;
-    font-size:9.5px; color:var(--faint); font-family:var(--mono);
-  }
-  .tabs .on { color:var(--accent); }
-  .tabs .plus {
-    width:30px; height:30px; border-radius:2px; background:var(--accent); color:#0A0A0A;
-    display:flex; align-items:center; justify-content:center;
-    font-size:17px; font-weight:800; line-height:1;
-  }
+  .screen img { display:block; width:100%; height:auto; }
   @media (max-width:900px) {
     .hero .cols { grid-template-columns:1fr; gap:44px; }
     .phone { margin:0 auto; }
@@ -481,32 +448,9 @@ export function landingPage(origin: string): string {
         <div class="island"></div>
         <div class="screen">
           <div class="sbar"><span>9:41</span><em>&#9679;&#9679;&#9679;&#9679;</em></div>
-          <div class="abar">
-            <img src="${LOGO_DATA_URI}" alt="">
-            <b>CONFAM<em>AI</em></b>
-            <span class="bell"></span>
-          </div>
-          <div class="feed">
-            <div class="q">
-              <div class="qh">Is the road flooded right now?</div>
-              <div class="qm">Oredo &middot; answered by musa</div>
-              <div class="shot"><span class="chip">VERIFIED ON BASE</span></div>
-              <div class="said">Yes, the whole stretch past the market.</div>
-              <div class="qm">34m from the pin &middot; 2 min ago &middot; &#8358;150</div>
-            </div>
-            <div class="q">
-              <div class="qh">Is the queue at the bank long?</div>
-              <div class="qm">Ikeja &middot; &#8358;200 &middot; 12 min left</div>
-              <div class="take">Take it</div>
-            </div>
-          </div>
-          <div class="tabs">
-            <span class="on">Home</span>
-            <span>Nearby</span>
-            <span class="plus">+</span>
-            <span>Proof</span>
-            <span>You</span>
-          </div>
+          <img src="${APP_SHOT_DATA_URI}"
+               width="${APP_SHOT_SIZE.width}" height="${APP_SHOT_SIZE.height}"
+               alt="The Confam home screen, asking what you need checked right now, above a list of questions confirmed nearby">
         </div>
       </div>
     </div>
