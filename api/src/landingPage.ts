@@ -182,14 +182,31 @@ export function landingPage(origin: string): string {
   header img { width:26px; height:26px; border-radius:6px; display:block; }
   .word { font-weight:700; letter-spacing:1.6px; font-size:16px; }
   .word em { font-style:normal; color:var(--accent); }
-  header nav { margin-left:auto; display:flex; gap:24px; align-items:center; font-size:14.5px; }
-  header nav a { color:var(--muted); text-decoration:none; }
-  header nav a:hover { color:var(--fg); }
-  header nav a.cta {
-    color:var(--fg); border:2px solid var(--line-strong); border-radius:2px;
-    padding:7px 15px; font-weight:700; font-size:14px;
+  /*
+   * The links are set in the mono face the rest of the page uses for its
+   * labels, which is the one thing on the masthead that says what this is
+   * before you have read a word of it. They mark themselves on hover with the
+   * accent rather than by changing colour alone, so the target is a line
+   * under the word and not a guess at which grey moved.
+   */
+  header nav { margin-left:auto; display:flex; gap:26px; align-items:center; }
+  header nav a {
+    font-family:var(--mono); font-size:12.5px; letter-spacing:.2px;
+    color:var(--faint); text-decoration:none;
+    padding-bottom:3px; border-bottom:1px solid transparent;
   }
-  header nav a.cta:hover { border-color:var(--accent); }
+  header nav a:hover { color:var(--fg); border-bottom-color:var(--accent); }
+  /*
+   * The one thing on the masthead somebody is meant to press is the one
+   * thing that looks pressable. Filled, not outlined: an outline in the
+   * strong line colour read as heavier than the orange it was competing with.
+   */
+  header nav a.cta {
+    font-family:inherit; font-size:13.5px; font-weight:700; letter-spacing:0;
+    background:var(--accent); color:#0A0A0A; border:0; border-radius:2px;
+    padding:9px 16px; margin-left:4px;
+  }
+  header nav a.cta:hover { filter:brightness(1.08); color:#0A0A0A; }
   @media (max-width:820px) { header nav a:not(.cta) { display:none; } }
 
   /* ── Hero ─────────────────────────────────────────────────────────── */
