@@ -224,7 +224,7 @@ export function landingPage(origin: string): string {
   .hero { position:relative; padding:62px 0 20px; }
   .hero .cols {
     position:relative; z-index:1;
-    display:grid; grid-template-columns:1.06fr .94fr; gap:40px; align-items:center;
+    display:grid; grid-template-columns:1.22fr .78fr; gap:40px; align-items:center;
   }
   .pill {
     display:inline-flex; align-items:center; gap:9px; border-radius:2px;
@@ -247,10 +247,10 @@ export function landingPage(origin: string): string {
   .asks { font-family:var(--mono); font-size:13.5px; color:var(--fg); margin:20px 0 28px; }
   .asks span { color:var(--faint); }
 
-  .badges { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-start; }
+  .badges { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; }
   .badges.centre { justify-content:center; }
   .badge { display:block; text-decoration:none; }
-  .badge img { display:block; height:52px; width:auto; }
+  .badge img { display:block; height:48px; width:auto; }
   .badge:hover img { filter:brightness(1.12); }
   /* The caption stays legible; it is the badge that is greyed out, not the fact. */
   .badge.off { cursor:default; }
@@ -329,7 +329,12 @@ export function landingPage(origin: string): string {
   }
   .sbar em { font-style:normal; letter-spacing:1px; color:var(--muted); }
   .screen img { display:block; width:100%; height:auto; }
-  @media (max-width:900px) {
+  /*
+   * Stacks earlier than it needs to. Between roughly 900 and 980 the hero
+   * still fits two columns, but not with the three ways in on one row, and a
+   * button that wraps alone under two badges is worse than a taller hero.
+   */
+  @media (max-width:980px) {
     .hero .cols { grid-template-columns:1fr; gap:44px; }
     .phone { margin:0 auto; }
   }
@@ -468,7 +473,7 @@ export function landingPage(origin: string): string {
           ${stores}
           <a class="btn" href="${esc(origin)}/confamagent">
             ${icon('terminal')}
-            <span class="txt"><b>Try Confam Agent</b><em>in your browser, no install</em></span>
+            <span class="txt"><b>Try Confam Agent</b><em>nothing to install</em></span>
             <span class="go">${icon('arrow')}</span>
           </a>
         </div>
