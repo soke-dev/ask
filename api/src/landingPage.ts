@@ -161,7 +161,7 @@ export function landingPage(origin: string): string {
   html { -webkit-text-size-adjust:100%; scroll-behavior:smooth; }
   body {
     margin:0; background:var(--bg); color:var(--fg); overflow-x:hidden;
-    font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    font:15.5px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   }
   a { color:var(--accent); }
   main, .wrap { max-width:1120px; margin:0 auto; padding:0 22px; }
@@ -180,7 +180,7 @@ export function landingPage(origin: string): string {
     max-width:1120px; margin:0 auto; padding:14px 22px;
   }
   header img { width:26px; height:26px; border-radius:6px; display:block; }
-  .word { font-weight:800; letter-spacing:1.6px; font-size:17px; }
+  .word { font-weight:700; letter-spacing:1.6px; font-size:16px; }
   .word em { font-style:normal; color:var(--accent); }
   header nav { margin-left:auto; display:flex; gap:24px; align-items:center; font-size:14.5px; }
   header nav a { color:var(--muted); text-decoration:none; }
@@ -214,13 +214,18 @@ export function landingPage(origin: string): string {
     font-family:var(--mono); margin-bottom:22px;
   }
   .pill i { width:7px; height:7px; background:var(--ok); border-radius:50%; font-style:normal; }
+  /*
+   * 800 at 64px was shouting. The page has one thing to say and it does not
+   * need to be the loudest text on a screen to land it, so everything steps
+   * down a size and out of the heaviest weight the stack has.
+   */
   h1 {
-    font-size:clamp(38px, 6.4vw, 64px); line-height:1.02; margin:0 0 18px;
-    font-weight:800; letter-spacing:-2.2px;
+    font-size:clamp(34px, 5.2vw, 52px); line-height:1.06; margin:0 0 18px;
+    font-weight:700; letter-spacing:-1.5px;
   }
   h1 span { color:var(--accent); display:block; }
-  .lede { font-size:clamp(16.5px,2vw,19px); color:var(--muted); max-width:560px; margin:0 0 14px; }
-  .asks { font-family:var(--mono); font-size:14px; color:var(--fg); margin:20px 0 28px; }
+  .lede { font-size:clamp(15.5px,1.7vw,17.5px); color:var(--muted); max-width:540px; margin:0 0 14px; }
+  .asks { font-family:var(--mono); font-size:13.5px; color:var(--fg); margin:20px 0 28px; }
   .asks span { color:var(--faint); }
 
   .badges { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-start; }
@@ -247,7 +252,7 @@ export function landingPage(origin: string): string {
     padding:11px 17px; color:var(--fg); background:var(--surface);
   }
   .btn .txt { display:flex; flex-direction:column; gap:1px; }
-  .btn b { font-size:15px; font-weight:700; }
+  .btn b { font-size:14.5px; font-weight:700; }
   .btn em { font-style:normal; font-size:12.5px; color:var(--faint); }
   .btn:hover { border-color:var(--accent); }
   .btn.primary { background:var(--accent); border-color:var(--accent); color:#0A0A0A; }
@@ -298,9 +303,9 @@ export function landingPage(origin: string): string {
     font-family:var(--mono); font-size:11px; letter-spacing:1.8px; text-transform:uppercase;
     color:var(--accent); font-weight:700; margin:0 0 14px;
   }
-  h2 { font-size:clamp(27px,3.7vw,40px); line-height:1.12; margin:0 0 16px;
-       font-weight:800; letter-spacing:-1.2px; }
-  h3 { font-size:26px; line-height:1.2; margin:0 0 14px; font-weight:800; letter-spacing:-.7px; }
+  h2 { font-size:clamp(23px,2.9vw,32px); line-height:1.16; margin:0 0 16px;
+       font-weight:700; letter-spacing:-.8px; }
+  h3 { font-size:22px; line-height:1.24; margin:0 0 14px; font-weight:700; letter-spacing:-.45px; }
   p.body { color:var(--muted); max-width:620px; margin:0 0 14px; }
   .mid { text-align:center; max-width:640px; margin:0 auto 34px; }
   .mid p { color:var(--muted); margin:0; }
@@ -313,8 +318,8 @@ export function landingPage(origin: string): string {
   .card:hover { border-color:var(--line-strong); }
   .card .top { display:flex; align-items:center; gap:9px; color:var(--accent); }
   .card .n { font-family:var(--mono); font-size:12px; color:var(--accent); }
-  .card b { display:block; margin:12px 0 6px; font-size:16.5px; letter-spacing:-.3px; }
-  .card p { margin:0; color:var(--muted); font-size:14.5px; line-height:1.55; }
+  .card b { display:block; margin:12px 0 6px; font-size:15.5px; font-weight:700; letter-spacing:-.2px; }
+  .card p { margin:0; color:var(--muted); font-size:14px; line-height:1.55; }
 
   .split { display:grid; grid-template-columns:1fr 1fr; gap:34px; align-items:start; }
   @media (max-width:760px) { .split { grid-template-columns:1fr; gap:24px; } }
@@ -329,7 +334,7 @@ export function landingPage(origin: string): string {
     white-space:pre-wrap;
   }
   .howto { margin-top:34px; }
-  .howto h4 { font-size:16.5px; font-weight:800; letter-spacing:-.3px; margin:0 0 12px; }
+  .howto h4 { font-size:15.5px; font-weight:700; letter-spacing:-.2px; margin:0 0 12px; }
   .howto .note {
     color:var(--faint); font-size:13.5px; line-height:1.6; max-width:680px; margin:12px 0 0;
   }
@@ -345,13 +350,13 @@ export function landingPage(origin: string): string {
   details[open] { border-color:var(--line-strong); }
   summary {
     display:flex; align-items:center; gap:16px; cursor:pointer; list-style:none;
-    padding:16px 18px; font-weight:700; font-size:15.5px;
+    padding:16px 18px; font-weight:700; font-size:15px;
   }
   summary::-webkit-details-marker { display:none; }
   summary span { flex:1; }
   summary .ico { color:var(--faint); transition:transform .18s ease; }
   details[open] summary .ico { transform:rotate(180deg); color:var(--accent); }
-  .answer { padding:0 18px 17px; color:var(--muted); font-size:14.5px; line-height:1.6; max-width:640px; }
+  .answer { padding:0 18px 17px; color:var(--muted); font-size:14px; line-height:1.6; max-width:640px; }
 
   /* ── Closing ──────────────────────────────────────────────────────── */
   .close {
