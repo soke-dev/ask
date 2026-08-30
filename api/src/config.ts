@@ -93,6 +93,14 @@ export const config = {
     apk: process.env.ANDROID_APK_URL ?? '',
     testflight: process.env.IOS_TESTFLIGHT_URL ?? '',
     support: process.env.SUPPORT_EMAIL ?? 'help@confam.xyz',
+    /*
+     * Where people go to check we are real. Each renders only when it is set,
+     * so an unset one leaves no dead link on the page rather than pointing at
+     * an empty profile.
+     */
+    x: process.env.X_URL ?? '',
+    github: process.env.GITHUB_URL ?? '',
+    telegram: process.env.TELEGRAM_URL ?? '',
   },
   storageDir: process.env.STORAGE_DIR ?? '.uploads',
 
