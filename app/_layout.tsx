@@ -166,6 +166,7 @@ function RootLayoutNav() {
         <Stack.Screen name="privacy" options={{ headerShown: false }} />
         <Stack.Screen name="help" options={{ headerShown: false }} />
         <Stack.Screen name="about" options={{ headerShown: false }} />
+        <Stack.Screen name="legal" options={{ headerShown: false }} />
         <Stack.Screen name="disputes" options={{ headerShown: false }} />
         <Stack.Screen name="admin" options={{ headerShown: false }} />
         <Stack.Screen name="signin" options={{ headerShown: false }} />

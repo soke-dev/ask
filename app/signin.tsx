@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useColors } from '@/hooks/useColors';
 import { useThemeMode } from '@/contexts/ThemeContext';
@@ -327,8 +328,29 @@ export default function SignInScreen() {
             )}
           </View>
 
+          {/*
+            * Openable, because it is being agreed to.
+            *
+            * This was plain text with the documents three taps away inside
+            * About, so somebody was asked to accept terms the screen gave them
+            * no way to read. Each half opens the document it names.
+            */}
           <Text style={[text.data, styles.terms, { color: colors.faintForeground }]}>
-            By continuing you agree to our Terms and Privacy Policy.
+            By continuing you agree to our{' '}
+            <Text
+              style={{ color: colors.accent }}
+              onPress={() => router.push('/legal?doc=terms')}
+            >
+              Terms
+            </Text>
+            {' and '}
+            <Text
+              style={{ color: colors.accent }}
+              onPress={() => router.push('/legal?doc=privacy')}
+            >
+              Privacy Policy
+            </Text>
+            .
           </Text>
         </Animated.View>
       </KeyboardAwareScrollViewCompat>
