@@ -636,12 +636,27 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
    * the only one — worth knowing before pointing a stranger's agent at this.
    */
   const created = await transaction(async (client) => {
+    /**
+     * Area and state borrowed from a place of the same name when the caller
+     * did not give one, because the answered feed matches on all three and a
+     * place with only a name is invisible in it.
+     */
+    const known = await client.query<{ area: string | null; state: string | null }>(
+      `SELECT area, state FROM places
+        WHERE name ILIKE $1 AND (area IS NOT NULL OR state IS NOT NULL)
+        ORDER BY created_at DESC LIMIT 1`,
+      [place],
+    );
+
     const placeRow = await client.query<{ id: string }>(
       `INSERT INTO places (provider, name, area, state, lat, lng)
-       VALUES ('agent', $1, $2, NULL, $3, $4) RETURNING id`,
+       VALUES ('agent', $1, $2, $3, $4, $5) RETURNING id`,
       [
         place,
-        typeof body.area === 'string' && body.area.trim() ? body.area.trim() : null,
+        (typeof body.area === 'string' && body.area.trim() ? body.area.trim() : null) ??
+          known.rows[0]?.area ??
+          null,
+        known.rows[0]?.state ?? null,
         Number.isFinite(Number(body.lat)) ? Number(body.lat) : null,
         Number.isFinite(Number(body.lng)) ? Number(body.lng) : null,
       ],

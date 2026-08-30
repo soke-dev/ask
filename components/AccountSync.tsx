@@ -211,11 +211,29 @@ export function AccountSync() {
     if (avatar) patch.avatarUri = avatar;
     if (Object.keys(patch).length > 0) a.updateProfile(patch);
 
+    /**
+     * Restored as saved, not as one of ten.
+     *
+     * This looked the area up in AREAS and gave up when it was not there —
+     * and AREAS is ten curated towns while the picker offers all 774 LGAs. So
+     * anybody outside those ten set their area, saw it save, and found
+     * themselves back on Ikeja at the next launch, with a nearby feed for a
+     * city they were not in.
+     *
+     * The curated list exists to make the picker quick, not to say which
+     * places somebody is allowed to live in. The saved value wins; AREAS is
+     * only consulted to keep the stable key when it does match.
+     */
     if (me.profile.homeArea) {
-      const known = AREAS.find(
-        (x) => x.label.toLowerCase() === me.profile.homeArea!.toLowerCase(),
+      const label = me.profile.homeArea;
+      const known = AREAS.find((x) => x.label.toLowerCase() === label.toLowerCase());
+      a.setHomeArea(
+        known ?? {
+          key: label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+          label,
+          state: me.profile.homeState ?? '',
+        },
       );
-      if (known) a.setHomeArea(known);
     }
     if (me.onboarded) a.finishOnboarding();
 

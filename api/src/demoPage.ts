@@ -264,6 +264,8 @@ let picked = -1;
 
 /** Coordinates for the place last picked, so proximity matching can use them. */
 let placeCoords = null;
+/** Its area, so the answered feed in the app can find the question later. */
+let placeArea = null;
 
 function suggestions() {
   const typed = box.value.trim().toLowerCase();
@@ -320,6 +322,9 @@ function renderSuggestions(list) {
       box.value = list[i].name;
       placeCoords = (list[i].lat != null && list[i].lng != null)
         ? { lat: list[i].lat, lng: list[i].lng } : null;
+      // The geocoder already told us where this sits; the answered feed needs
+      // it, and nothing else on the page was carrying it.
+      placeArea = list[i].area || null;
       hideSuggestions();
       submit();
     };
@@ -379,6 +384,7 @@ async function submit() {
   if (step === 'question') {
     pending = text;
     placeCoords = null;
+    placeArea = null;
     say('<i>&gt;</i> ' + esc(text), 'you');
     prompt('place');
     return;
@@ -389,21 +395,23 @@ async function submit() {
     const yes = /^(y|yes)$/i.test(text);
     prompt('question');
     if (!yes) { say(G + 'nothing sent. no money moved.', 'dim'); return; }
-    await ask(offer.question, offer.place, true, offer.at);
+    await ask(offer.question, offer.place, true, offer.at, lastArea);
     return;
   }
 
   say('<i>where?</i> ' + esc(text), 'you');
   const place = text;
   const at = placeCoords;
+  const area = placeArea;
   prompt('question');
-  await ask(pending, place, false, at);
+  await ask(pending, place, false, at, area);
 }
 
 /** What the agent proposed to spend on, held while the y/n is answered. */
 let offer = { question: '', place: '', at: null };
 /** The coordinates the last ask used, so a confirmation reuses them. */
 let lastAt = null;
+let lastArea = null;
 
 function command(c) {
   const name = c.slice(1).split(' ')[0];
@@ -432,8 +440,9 @@ function command(c) {
   say(G + 'unknown command. /help', 'warn');
 }
 
-async function ask(question, place, confirm, at) {
+async function ask(question, place, confirm, at, area) {
   lastAt = at || lastAt;
+  lastArea = area || lastArea;
   const thinking = say(G + (confirm ? 'locking the bounty on Base...' : 'checking what the network already knows...'), 'dim');
   try {
     const r = await fetch('/demo/ask', {
@@ -441,6 +450,7 @@ async function ask(question, place, confirm, at) {
       body: JSON.stringify({
         question, place, confirm: confirm === true,
         lat: at ? at.lat : null, lng: at ? at.lng : null,
+        area: area || lastArea || null,
       }),
     });
     const d = await r.json();

@@ -231,6 +231,8 @@ demoRouter.post('/ask', async (req, res) => {
     place?: unknown;
     lat?: unknown;
     lng?: unknown;
+    /** Where the place sits, so the answered feed can find it. */
+    area?: unknown;
     /** Set once the visitor has agreed to spend. Absent means only decide. */
     confirm?: unknown;
   };
@@ -339,21 +341,34 @@ demoRouter.post('/ask', async (req, res) => {
    * invent a location: if nobody has been there, it stays null, which is
    * honest and no worse than before.
    */
-  const known = at
-    ? null
-    : await one<{ lat: number; lng: number }>(
-        `SELECT lat, lng FROM places
-          WHERE name ILIKE $1 AND lat IS NOT NULL
-          ORDER BY created_at DESC LIMIT 1`,
-        [place],
-      );
-  const coords = at ?? (known ? { lat: known.lat, lng: known.lng } : null);
+  const known = await one<{ lat: number | null; lng: number | null; area: string | null; state: string | null }>(
+    `SELECT lat, lng, area, state FROM places
+      WHERE name ILIKE $1
+      ORDER BY (lat IS NOT NULL) DESC, created_at DESC
+      LIMIT 1`,
+    [place],
+  );
+  const coords = at ?? (known?.lat != null && known.lng != null ? { lat: known.lat, lng: known.lng } : null);
+
+  /**
+   * The area, borrowed along with the coordinates.
+   *
+   * Places created here had none, and the Answered-nearby feed matches on
+   * name, area and state together — so every question an agent asked was
+   * invisible in it, however close somebody was standing. "Etete Road" does
+   * not contain "Oredo".
+   */
+  const area =
+    (typeof body.area === 'string' && body.area.trim() ? body.area.trim() : null) ??
+    known?.area ??
+    null;
+  const state = known?.state ?? null;
 
   const created = await transaction(async (client) => {
     const placeRow = await client.query<{ id: string }>(
       `INSERT INTO places (provider, name, area, state, lat, lng)
-       VALUES ('demo', $1, NULL, NULL, $2, $3) RETURNING id`,
-      [place, coords?.lat ?? null, coords?.lng ?? null],
+       VALUES ('demo', $1, $2, $3, $4, $5) RETURNING id`,
+      [place, area, state, coords?.lat ?? null, coords?.lng ?? null],
     );
 
     const q = await client.query<{ id: string }>(
