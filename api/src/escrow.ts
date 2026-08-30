@@ -73,6 +73,16 @@ const ESCROW_ABI = [
     outputs: [],
   },
   {
+    name: 'resolve',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'jobId', type: 'bytes32' },
+      { name: 'askerWins', type: 'bool' },
+    ],
+    outputs: [],
+  },
+  {
     name: 'dispute',
     type: 'function',
     stateMutability: 'nonpayable',
@@ -130,6 +140,63 @@ function relayer() {
     wallet: createWalletClient({ account, chain: base, transport: http(config.chain.rpcUrl) }),
     escrow: config.chain.escrowAddress as `0x${string}`,
   };
+}
+
+/**
+ * The account that rules on disputes.
+ *
+ * Separate from the relayer because the contract insists: resolve() is
+ * onlyArbiter, and the relayer is not it. It also pays its own gas, since it
+ * sends the transaction rather than forwarding somebody's signature.
+ *
+ * A dispute resolved on the desk used to update the database and leave the
+ * escrow Disputed on chain for ever — the money frozen, the row saying
+ * otherwise, and no code anywhere that could have moved it.
+ */
+export const hasArbiter = () =>
+  /^0x[0-9a-fA-F]{64}$/.test(config.chain.arbiterKey) && hasEscrow();
+
+function arbiter() {
+  if (!hasArbiter()) throw new Error('ARBITER_PRIVATE_KEY is not set');
+  const account = privateKeyToAccount(config.chain.arbiterKey as `0x${string}`);
+  return {
+    account,
+    wallet: createWalletClient({ account, chain: base, transport: http(config.chain.rpcUrl) }),
+    escrow: config.chain.escrowAddress as `0x${string}`,
+  };
+}
+
+/** The address the contract will accept a ruling from. */
+export function arbiterAddress(): `0x${string}` | null {
+  return hasArbiter()
+    ? privateKeyToAccount(config.chain.arbiterKey as `0x${string}`).address
+    : null;
+}
+
+/**
+ * Settles a disputed job on chain: the bounty to the verifier, or back to the
+ * asker. Refuses loudly rather than pretending, because a ruling recorded in
+ * the database and not on the chain is the state this exists to end.
+ */
+export async function relayResolve(
+  jobId: `0x${string}`,
+  askerWins: boolean,
+): Promise<{ txHash: string }> {
+  const { account, wallet, escrow } = arbiter();
+
+  const { request } = await publicClient.simulateContract({
+    address: escrow,
+    abi: ESCROW_ABI,
+    functionName: 'resolve',
+    args: [jobId, askerWins],
+    account,
+  }).catch((error) => {
+    throw readableRevert(error, 'resolve');
+  });
+
+  const txHash = await wallet.writeContract(request);
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  return { txHash };
 }
 
 /**

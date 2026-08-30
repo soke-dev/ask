@@ -747,7 +747,7 @@ async function getKey() {
 
     say(G + 'key for ' + esc(r.address), 'ok');
     withCopy(say(G + esc(r.token) + '<button class="copy">copy</button>', 'big'), r.token);
-    say(G + 'copy it now — it is not stored and cannot be shown again.', 'warn');
+    say(G + esc(r.warning || 'copy it now - it is not stored and cannot be shown again.'), 'warn');
     say('');
     // The whole command, with the real key in it rather than the truncated one
     // shown, so what gets pasted is what actually runs.

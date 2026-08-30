@@ -169,6 +169,18 @@ export const config = {
     agentWalletKey: normaliseKey(process.env.AGENT_WALLET_PRIVATE_KEY ?? ''),
 
     /**
+     * The account the contract accepts rulings from.
+     *
+     * Its own key, because resolve() is onlyArbiter and neither the relayer
+     * nor the agent wallet is it. Unset means the desk can still record a
+     * decision and will say plainly that the escrow was not moved — which is
+     * the honest version of what it was doing silently before.
+     *
+     * Needs a little ETH on Base: it sends the transaction itself.
+     */
+    arbiterKey: normaliseKey(process.env.ARBITER_PRIVATE_KEY ?? ''),
+
+    /**
      * The AskEscrow proxy. The proxy address, never the implementation —
      * the proxy holds the money and survives every upgrade, while the
      * implementation holds only code and would be empty.

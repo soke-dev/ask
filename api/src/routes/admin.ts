@@ -3,6 +3,7 @@ import { attemptLogin, issueToken, requireAdmin } from '../adminAuth.js';
 import { one, query, transaction } from '../db.js';
 import { storage } from '../storage.js';
 import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
+import { hasArbiter, relayResolve } from '../escrow.js';
 import { notify } from '../push.js';
 
 export const adminRouter: Router = Router();
@@ -186,7 +187,7 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
     const outcome = await transaction(async (client) => {
       const { rows } = await client.query(
         `SELECT d.id, d.status, d.question_id, d.task_id,
-                q.asker_id, q.bounty_kobo, q.body,
+                q.asker_id, q.bounty_kobo, q.body, q.chain_job_id,
                 t.verifier_id
            FROM disputes d
            JOIN questions q ON q.id = d.question_id
@@ -235,9 +236,10 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
 
       return {
         ok: true as const,
+        chainJobId: dispute.chain_job_id ? String(dispute.chain_job_id) : null,
+        questionId: String(dispute.question_id),
         askerId: String(dispute.asker_id),
         verifierId: dispute.verifier_id ? String(dispute.verifier_id) : null,
-        questionId: String(dispute.question_id),
         question: String(dispute.body ?? ''),
         bountyKobo: Number(dispute.bounty_kobo),
       };
@@ -247,7 +249,44 @@ adminRouter.post('/disputes/:id/resolve', async (req, res) => {
       res.status(outcome.error === 'not_found' ? 404 : 409).json({ error: outcome.error });
       return;
     }
-    res.json({ ok: true });
+    /**
+     * The chain, not only the ledger.
+     *
+     * A ruling used to update the database and stop, leaving the escrow
+     * Disputed on Base with nobody able to move it — the row said resolved,
+     * the money said otherwise, and no code anywhere could have settled it.
+     * At least one job is still frozen from before this existed.
+     *
+     * Reported rather than thrown: the decision is made and the ledger is
+     * already written, so failing the request would misrepresent what
+     * happened. What it cannot do is stay quiet about the money.
+     */
+    let chain: { settled: boolean; txHash?: string; why?: string } = {
+      settled: false,
+      why: 'no_chain_job',
+    };
+
+    if (outcome.chainJobId) {
+      if (!hasArbiter()) {
+        chain = { settled: false, why: 'no_arbiter_key' };
+        console.warn('[admin] resolved in the database only — ARBITER_PRIVATE_KEY is not set');
+      } else {
+        try {
+          const r = await relayResolve(outcome.chainJobId as `0x${string}`, winner === 'asker');
+          await query(
+            `UPDATE questions SET ${winner === 'asker' ? 'refund_tx' : 'release_tx'} = COALESCE(${winner === 'asker' ? 'refund_tx' : 'release_tx'}, $2) WHERE id = $1`,
+            [outcome.questionId, r.txHash],
+          );
+          chain = { settled: true, txHash: r.txHash };
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          console.warn('[admin] ruling recorded but escrow not settled —', detail);
+          chain = { settled: false, why: detail.slice(0, 160) };
+        }
+      }
+    }
+
+    res.json({ ok: true, chain });
 
     /**
      * Both sides are told how it went, and each is told the part that

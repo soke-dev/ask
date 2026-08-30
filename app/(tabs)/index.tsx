@@ -1103,7 +1103,20 @@ export default function AskScreen() {
                             confirmed is confirmed, and whether it came as a
                             photo or a clip changes nothing about the answer. */}
                         · {item.ago}
-                        {item.area !== homeArea.label ? ` · ${shortPlace(item.area)}` : ''}
+                        {/*
+                          * The place, at its most specific.
+                          *
+                          * This showed `area`, which for anything asked through
+                          * an agent is the town it inherited — so five different
+                          * streets all read "Benin City, Edo" and the one field
+                          * that said which street was ignored.
+                          */}
+                        {(() => {
+                          const where = item.placeName || item.area;
+                          return where && where !== homeArea.label
+                            ? ` · ${shortPlace(where)}`
+                            : '';
+                        })()}
                       </Text>
                     </View>
                   </View>

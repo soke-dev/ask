@@ -306,6 +306,7 @@ agentRouter.post('/keys/wallet', async (req, res) => {
   const stored = address.toLowerCase();
   const name = String(body.name ?? '').trim().slice(0, 80) || `Wallet ${address.slice(0, 8)}`;
   const { token, hint, hash } = mintKey();
+  let replaced = 0;
 
   /**
    * Caught, because Express 4 does not await a handler.
@@ -335,6 +336,26 @@ agentRouter.post('/keys/wallet', async (req, res) => {
       return;
     }
 
+    /**
+     * One live key per wallet. Connecting again replaces it.
+     *
+     * Every connect minted another, so one wallet quietly accumulated four —
+     * all valid, all able to spend, and no way to tell which belonged to what.
+     * A key cannot be shown twice, so somebody who has lost theirs has to be
+     * able to get another; what they should not get is a growing pile of
+     * credentials they have forgotten about.
+     *
+     * Replaced rather than refused, and the reply says how many went, so
+     * nobody wonders why the key they wrote down last week stopped working.
+     */
+    const gone = await query<{ id: string }>(
+      `UPDATE api_keys SET revoked_at = now()
+        WHERE user_id = $1 AND revoked_at IS NULL
+        RETURNING id`,
+      [userId],
+    );
+    replaced = gone.length;
+
     await query(
       `INSERT INTO api_keys (user_id, name, token_hash, hint) VALUES ($1, $2, $3, $4)`,
       [userId, name, hash, hint],
@@ -349,7 +370,11 @@ agentRouter.post('/keys/wallet', async (req, res) => {
     address,
     name,
     token,
-    warning: 'Copy this now. It is not recoverable.',
+    replaced,
+    warning:
+      replaced > 0
+        ? `Copy this now. It is not recoverable, and it replaced ${replaced} earlier key${replaced === 1 ? '' : 's'} for this wallet.`
+        : 'Copy this now. It is not recoverable.',
     usage: {
       ask: 'POST /agent/ask',
       poll: 'GET /agent/ask/:id',
