@@ -158,32 +158,32 @@ export default function SignInScreen() {
             <Text style={{ color: colors.accent }}>actually there.</Text>
           </Text>
 
+          <Text style={[text.body, { color: colors.accent, marginTop: 10 }]}>
+            The physical world, on demand.
+          </Text>
+
           {/*
-            * Four lines, in the order somebody works it out.
+            * Three lines, and the last one is the turn.
             *
-            * The questions first, because recognising one you have wanted
-            * answered explains the product faster than any description of it.
-            * Then who answers, then how, and last the part nobody expects:
-            * machines ask it too, and pay for it.
+            * There were four, evenly spaced, which read as a list of unrelated
+            * claims rather than one idea. The questions go first because
+            * recognising one you have wanted answered explains this faster
+            * than any description; then how it is answered; then the part
+            * nobody expects.
             *
-            * Spaced by hand rather than an even gap. The first line is the
-            * hook and the middle two are one thought, so an equal rhythm made
-            * four unrelated statements out of what is really three beats.
+            * The chain is mentioned as proof rather than as payment. What
+            * somebody signing up cares about is whether an answer can be
+            * trusted, not which token moved.
             */}
           <View style={styles.facts}>
             <Text style={[text.body, { color: colors.foreground }]}>
               Is the road flooded? Is the queue long? Is the shop open?
             </Text>
-
-            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 14 }]}>
-              Confam AI answers what is already known.
+            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 12 }]}>
+              Confam AI answers what is already known. Otherwise somebody nearby goes and looks.
             </Text>
-            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 2 }]}>
-              If nobody has been, somebody nearby goes and looks.
-            </Text>
-
-            <Text style={[text.body, { color: colors.accent, marginTop: 14 }]}>
-              Machines ask it too, and pay in USDC.
+            <Text style={[text.body, { color: colors.mutedForeground, marginTop: 12 }]}>
+              Machines ask it too, and every answer is proved on chain.
             </Text>
           </View>
 
@@ -451,7 +451,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  facts: { marginTop: 30 },
+  facts: { marginTop: 24 },
   plate: {
     width: 30,
     height: 30,
