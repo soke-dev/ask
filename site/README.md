@@ -1,8 +1,7 @@
 # The public site
 
-Vercel serves this repository and it has no pages in it, which is the point.
-The configuration is `vercel.json` at the repository root, and the only file
-actually served from disk is `site/public/robots.txt`.
+This directory is the Vercel project. It has no pages in it, which is the
+point: the only file served from disk is `public/robots.txt`.
 
 ## Why a proxy and not a copy
 
@@ -24,21 +23,22 @@ that could be copied here:
 So Vercel serves almost nothing and forwards everything. One source, on
 Railway, at whatever domain people actually type.
 
-## Why the config is at the root and not in here
+## Why Vercel is pointed at this directory and not the repository root
 
-It was in here, and the Vercel import picker would not show this directory,
-so the root directory could not be set to it. The root is the default, needs
-no picker, and cannot be got wrong.
+It was pointed at the root for one commit, because the import picker
+would not list this directory until its cached view of the repository caught
+up with the branch. The root does not work, and the reason is worth writing
+down: Vercel treats a top-level `api/` directory as Serverless Functions and
+tries to compile every TypeScript file in it. This repository has one, and it
+is the Express backend. The deploy spent two minutes building it and failed.
 
-That means Vercel sees the whole repository, which is why the config is
-explicit about three things it would otherwise guess:
+Setting `buildCommand` to a no-op does not prevent that. Function detection is
+a separate step and does not consult it.
 
-- `installCommand` and `buildCommand` are no-ops. The root `package.json` has
-  a `build` script that builds the Expo web app, and Vercel would have found
-  it and run it.
-- `outputDirectory` is `site/public`, so the only file served from disk is
-  `robots.txt`. Without it the repository root is the web root and
-  `google-services.json`, `app.json` and the rest are all fetchable.
+Pointing the root directory here means Vercel sees three files and no
+`api/`, no `package.json` with a `build` script that builds the Expo web app,
+and no repository source to serve by accident. `outputDirectory` is `public`,
+relative to this directory, so `robots.txt` is the only thing served off disk.
 
 ## What is forwarded
 
@@ -48,8 +48,8 @@ here. The app talks to Railway directly and does not need them at this domain.
 
 ## Setting it up
 
-1. Import the repository in Vercel. Leave **Root Directory** as `/` and the
-   framework preset as **Other**. `vercel.json` covers the rest.
+1. Import the repository in Vercel and set **Root Directory** to `site`.
+   Framework preset **Other**. `site/vercel.json` covers the rest.
 2. Add the domain in Vercel and point DNS at it.
 3. On Railway, set `PUBLIC_ORIGIN` to that domain, for example
    `https://confam.xyz`.
@@ -62,5 +62,5 @@ it. See `api/src/origin.ts`.
 
 ## When the API moves
 
-The Railway hostname appears ten times in `vercel.json`. If it changes, it
-changes there, and nowhere else.
+The Railway hostname appears ten times in `site/vercel.json`. If it changes,
+it changes there, and nowhere else.

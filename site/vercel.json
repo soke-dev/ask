@@ -1,9 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "echo no install: nothing here is built",
-  "buildCommand": "echo no build: the pages come from the API",
-  "outputDirectory": "site/public",
+  "installCommand": "echo nothing to install",
+  "buildCommand": "echo nothing to build: the pages come from the API",
+  "outputDirectory": "public",
   "rewrites": [
     {
       "source": "/",
