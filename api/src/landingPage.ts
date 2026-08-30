@@ -231,13 +231,16 @@ export function landingPage(origin: string): string {
   /* The caption stays legible; it is the badge that is greyed out, not the fact. */
   .badge.off { cursor:default; }
   .badge.off img { opacity:.36; }
+  /*
+   * Sized to the badges beside it rather than to its own text. Three things
+   * on one row that do not share a top edge read as an accident.
+   */
+  .badges .btn { padding:8px 16px; }
   .badge em {
     display:block; font-style:normal; text-align:center;
     font-size:12px; color:var(--faint); margin-top:8px;
   }
 
-  .btns { display:flex; flex-wrap:wrap; gap:11px; }
-  .btns.after { margin-top:16px; }
   .btn {
     display:flex; align-items:center; gap:11px; text-decoration:none;
     border:2px solid var(--line-strong); border-radius:2px;
@@ -358,7 +361,6 @@ export function landingPage(origin: string): string {
   }
   .close h2 { max-width:640px; margin:0 auto 14px; }
   .close p { color:var(--muted); margin:0 auto 28px; max-width:520px; }
-  .close .btns { justify-content:center; }
 
   /* ── Footer ───────────────────────────────────────────────────────── */
   footer { padding:52px 0 60px; color:var(--faint); font-size:14px; }
@@ -420,8 +422,8 @@ export function landingPage(origin: string): string {
           Is the shop open? <span>&middot;</span> Did the delivery arrive?
         </p>
 
-        <div class="badges" id="get">${stores}</div>
-        <div class="btns after">
+        <div class="badges" id="get">
+          ${stores}
           <a class="btn" href="${esc(origin)}/confamagent">
             ${icon('terminal')}
             <span class="txt"><b>Try Confam Agent</b><em>in your browser, no install</em></span>
