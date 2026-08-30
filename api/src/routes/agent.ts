@@ -67,6 +67,117 @@ agentRouter.use((req, res, next) => {
   next();
 });
 
+/**
+ * What this is, in a shape a program can read.
+ *
+ * The demo page is for people. An agent should not have to scrape a terminal
+ * to learn the endpoints, and its author should not have to translate prose
+ * into a tool definition by hand — so the tool definition is the document.
+ * Point a model at this URL and it has everything it needs to call the thing.
+ *
+ * Unauthenticated on purpose: you cannot get a key without first knowing that
+ * keys exist.
+ */
+agentRouter.get('/', (req, res) => {
+  const base = `${req.protocol}://${req.get('host')}`;
+
+  res.json({
+    name: 'confam',
+    description:
+      'Answers questions about places, events and situations in the physical world — ' +
+      'whether a road is passable, whether a queue has formed, whether a shop still ' +
+      'exists, what is happening at an address right now. Reuses a recent verified ' +
+      'answer when one holds; otherwise pays a person nearby in USDC on Base to walk ' +
+      'there and photograph it.',
+    chain: { network: 'base', chainId: config.chain.chainId, escrow: config.chain.escrowAddress || null },
+
+    auth: {
+      how: 'A key is bound to a wallet address. Sign a challenge with that wallet.',
+      steps: [
+        `POST ${base}/agent/keys/challenge  {"address":"0x..."}  -> {"message":"..."}`,
+        'Sign that message with the wallet (personal_sign / EIP-191).',
+        `POST ${base}/agent/keys/wallet  {"address":"0x...","signature":"0x..."}  -> {"token":"sk_confam_..."}`,
+        'Send it as: Authorization: Bearer sk_confam_...',
+      ],
+      note: 'No browser needed. Any library that can sign a message can do this.',
+    },
+
+    /**
+     * Shaped as a function/tool definition, because that is what the caller is
+     * going to build anyway and a description they have to translate is a
+     * description they will translate wrong.
+     */
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'confam_ask',
+          description:
+            'Answer a question about a physical place. Returns immediately from existing ' +
+            'verified evidence when somebody checked recently and it still holds; otherwise ' +
+            'dispatches a person and returns a job id to poll.',
+          parameters: {
+            type: 'object',
+            properties: {
+              question: { type: 'string', description: 'What to check, in plain language.' },
+              place: { type: 'string', description: 'The place to check, e.g. "Apapa" or "Etete Road".' },
+              lat: { type: 'number', description: 'Latitude of the place, if known. Improves matching.' },
+              lng: { type: 'number', description: 'Longitude of the place, if known.' },
+              bountyNgn: {
+                type: 'number',
+                description: `What to pay, in naira. ${MIN_BOUNTY_NGN} to ${MAX_HOUSE_BOUNTY_NGN} when we fund it.`,
+              },
+              selfFund: {
+                type: 'boolean',
+                description:
+                  'Pay from your own wallet instead of ours. Removes the daily limit and the ceiling; ' +
+                  'you sign the escrow yourself afterwards.',
+              },
+            },
+            required: ['question', 'place'],
+          },
+        },
+        endpoint: { method: 'POST', url: `${base}/agent/ask` },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'confam_result',
+          description:
+            'Whether anybody has been yet. Returns the answer, the photographs, how far from ' +
+            'the place they were taken, when, and by whom.',
+          parameters: {
+            type: 'object',
+            properties: { id: { type: 'string', description: 'The job id returned by confam_ask.' } },
+            required: ['id'],
+          },
+        },
+        endpoint: { method: 'GET', url: `${base}/agent/ask/{id}` },
+      },
+    ],
+
+    proof: {
+      url: `${base}/escrow/{id}/proof`,
+      auth: 'none',
+      what:
+        'The keccak256 of every evidence file, the escrow job id, and the funding, claim and ' +
+        'release transactions on Base. Hash the file yourself and compare — this server is not ' +
+        'in the path.',
+    },
+
+    limits: {
+      houseFunded: {
+        minNgn: MIN_BOUNTY_NGN,
+        maxNgn: MAX_HOUSE_BOUNTY_NGN,
+        jobsPerKeyPerDay: HOUSE_JOBS_PER_DAY,
+      },
+      selfFunded: 'no limit — it is your money',
+    },
+
+    humanDemo: `${base}/demo`,
+  });
+});
+
 // ── Keys ────────────────────────────────────────────────────────────────────
 // Minted by a signed-in person for their own account, so a key can only ever
 // be created by somebody who could already do everything it permits.
