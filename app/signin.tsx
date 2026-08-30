@@ -153,13 +153,18 @@ export default function SignInScreen() {
             </Pressable>
           </View>
 
+          {/*
+            * The tagline is the headline now.
+            *
+            * "Real answers from people who are actually there" described the
+            * mechanism, and the three lines below already do that, with
+            * examples. This says what the product is, which is what a
+            * headline is for, and it is what the terminal has been saying
+            * all along.
+            */}
           <Text style={[styles.headline, { color: colors.foreground }]}>
-            Real answers from{'\n'}people who are{'\n'}
-            <Text style={{ color: colors.accent }}>actually there.</Text>
-          </Text>
-
-          <Text style={[text.body, { color: colors.accent, marginTop: 8 }]}>
-            The physical world, on demand.
+            The physical world,{'\n'}
+            <Text style={{ color: colors.accent }}>on demand.</Text>
           </Text>
 
           {/*
