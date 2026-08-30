@@ -452,7 +452,7 @@ export default function YouScreen() {
 
           <View style={{ flex: 1 }}>
             {/* The username leads, because it is the thing they chose and the
-                thing other people see. A real name only appears once the NIN
+                thing other people see. A real name only appears once the ID
                 check has returned one — never a guess from the email. */}
             <View style={styles.nameRow}>
               <Text style={[text.title, { color: colors.foreground }]} numberOfLines={1}>

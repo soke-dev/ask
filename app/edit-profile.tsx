@@ -40,7 +40,7 @@ export default function EditProfileScreen() {
   const usernameValid = USERNAME_RULE.test(username);
   const canSave = usernameValid;
 
-  /** Only the NIN check can produce a name, so that is what proves one. */
+  /** Only the ID check can produce a name, so that is what proves one. */
   const nameVerified = identity.status === 'verified' && profile.name.length > 0;
 
   const initials = (username || user?.email || 'U').slice(0, 2).toUpperCase();
@@ -208,7 +208,7 @@ export default function EditProfileScreen() {
         {/* ── Name ─────────────────────────────────────────────────────
             Not an input. A name anyone can type is not identity, and this
             field used to accept anything while looking authoritative. It now
-            shows only what the NIN check returned, or an honest blank. */}
+            shows only what the ID check returned, or an honest blank. */}
         <Text style={[text.label, styles.fieldLabel, { color: colors.faintForeground }]}>
           Your name
         </Text>
@@ -258,12 +258,12 @@ export default function EditProfileScreen() {
         )}
         <Text style={[text.data, { color: colors.faintForeground, marginTop: 6 }]}>
           {nameVerified
-            ? 'Read from your NIN record. Others still only ever see your username.'
+            ? 'Read from your ID record. Others still only ever see your username.'
             : identity.status === 'pending'
               ? 'Someone is checking it by hand. Your name appears here once approved.'
               : identity.status === 'rejected' && identity.reason
                 ? identity.reason
-                : 'Your name comes from the NIN check, never from typing. Until then you are just your username.'}
+                : 'Your name comes from the ID check, never from typing. Until then you are just your username.'}
         </Text>
 
         {/* ── Username ─────────────────────────────────────────────── */}

@@ -12,8 +12,8 @@ import { SettingToggle } from '@/components/SettingToggle';
 const FACTS: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }[] = [
   {
     icon: 'person-outline',
-    title: 'Others see your first name only',
-    body: 'Never your surname, your email, or your phone number — in either direction. Nobody meets anybody on a job, so there is nothing to coordinate.',
+    title: 'Others see your username only',
+    body: 'Never your real name, your email, or your phone number, in either direction. Nobody meets anybody on a job, so there is nothing to coordinate.',
   },
   {
     icon: 'location-outline',
@@ -22,8 +22,8 @@ const FACTS: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string
   },
   {
     icon: 'sparkles-outline',
-    title: 'Evidence is checked by a model first',
-    body: 'Your photo or video is sent to OpenAI to judge whether it shows what was asked, along with the question itself. It is not used to train anything, and a machine never rejects your work on its own.',
+    title: 'Confam AI checks your evidence first',
+    body: 'Your photo or video is read by the agent, with the question, to judge whether it shows what was asked. That means it leaves our servers to a model provider. It is not used to train anything, and a machine never rejects your work on its own.',
   },
   {
     icon: 'link-outline',
@@ -32,8 +32,8 @@ const FACTS: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string
   },
   {
     icon: 'card-outline',
-    title: 'Your NIN is never stored',
-    body: 'It is checked once and only the result is kept. The number itself is not saved, so it cannot leak from here.',
+    title: 'Your ID is saved, and only we see it',
+    body: 'It is kept so we can confirm you are a real person, keep duplicate and throwaway accounts off the board, and open the higher-paying jobs that ask for a confirmed identity. Only the review team can read it. It is never shown to another user, and never on a job.',
   },
   {
     icon: 'camera-outline',
