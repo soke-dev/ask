@@ -1,0 +1,17 @@
+# What must never reach a Vercel deployment.
+#
+# Vercel honours .gitignore for git-based deploys but not for CLI ones, and the
+# admin desk is deployed from the CLI. These are the files that would be served
+# as static assets if they were ever uploaded.
+
+.env
+.env.*
+*/.env
+*/.env.*
+contracts/.env
+
+api/.uploads
+api/dist
+node_modules
+.git
+.expo

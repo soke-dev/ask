@@ -47,4 +47,5 @@ dist-*/
 # The Foundry project keeps its own git repo, which cannot be added to this
 # one as plain files. See the note in the Confam rebrand commit: the contract
 # source is NOT backed up here yet.
-contracts/
+# contracts/ is part of this repository. Its own .gitignore keeps lib,
+# out, cache, broadcast and the deploy key out of it.
