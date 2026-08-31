@@ -14,7 +14,8 @@
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "desk": "node scripts/export-web.mjs"
+    "desk": "node scripts/export-web.mjs",
+    "push": "node scripts/push-update.mjs"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
