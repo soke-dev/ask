@@ -1997,18 +1997,47 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return { ok: false, detail: result.detail };
     }
 
+    /**
+     * Into the taken pile now, carrying the task id the server just issued.
+     *
+     * This existed and never ran: it sat after the return above, so the job
+     * only reached `myJobs` when the refresh landed a moment later. The task
+     * screen prefers the taken copy and falls back to the board's, and the
+     * board's has no task id — so anybody who accepted a job and recorded
+     * straight away submitted evidence with nowhere to be filed. The asker
+     * got an answer with no media, and because the on-chain claim records
+     * nobody without it, the escrow could not be released at all.
+     *
+     * Copying the board's entry would not have been enough either. It has
+     * `taskId: null` by construction, since /questions/nearby has no task to
+     * report. The id has to come from the accept response, which is the first
+     * moment a task exists.
+     */
+    setNearbyTasks((prev) => {
+      const job = prev.find((t) => t.id === taskId);
+      if (job) {
+        setMyJobs((mine) =>
+          mine.some((m) => m.id === taskId)
+            ? mine
+            : [
+                {
+                  ...job,
+                  status: 'accepted' as const,
+                  taskId: result.data.taskId,
+                  serverStatus: 'accepted',
+                },
+                ...mine,
+              ],
+        );
+      }
+      return prev.map((t) => (t.id === taskId ? { ...t, status: 'accepted' as const } : t));
+    });
+
     // Both lists: it leaves the board and joins the taken pile. Without the
     // second call the job disappears entirely the moment /nearby drops it.
     void refreshJobs();
     void refreshMyJobs();
     return { ok: true };
-
-    // Moved immediately so the task screen still has it while those land.
-    setNearbyTasks((prev) => {
-      const job = prev.find((t) => t.id === taskId);
-      if (job) setMyJobs((mine) => (mine.some((m) => m.id === taskId) ? mine : [{ ...job, status: 'accepted' }, ...mine]));
-      return prev.map((t) => (t.id === taskId ? { ...t, status: 'accepted' as const } : t));
-    });
   }, []);
 
   /**
