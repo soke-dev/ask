@@ -18,7 +18,8 @@
       "bundleIdentifier": "xyz.confam.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "buildNumber": "2"
     },
     "android": {
       "package": "xyz.confam.app",
