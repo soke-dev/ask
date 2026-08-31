@@ -570,6 +570,29 @@ export default function TaskScreen() {
    * whatever supplied it could name an address of its own choosing.
    */
   async function deliver(at: { lat: number; lng: number } | null = coords) {
+    /**
+     * No task id, no submission.
+     *
+     * The evidence endpoint files what it is given against a task, and with no
+     * task id it checks the file and keeps nothing. This used to warn to a
+     * console and carry on, which produced the worst outcome available: the
+     * asker was told an answer had arrived and shown no media, the verifier
+     * was told they had been paid, and because the on-chain claim never
+     * recorded them the escrow had nobody to pay and could not be released at
+     * all. A trip was made, the money froze, and nothing anywhere said so.
+     *
+     * Refusing is not a fix for whatever loses the task id. It is a refusal to
+     * turn that into an unpayable job and a lost walk.
+     */
+    if (!task!.taskId) {
+      setDeliverError(
+        'This job did not finish loading, so there is nowhere to file your evidence. ' +
+          'Go back, open the job again, and send it. Nothing has been lost.',
+      );
+      setPageState('check_result');
+      return;
+    }
+
     setPageState('ai_checking');
     setDeliverError(null);
 
@@ -596,10 +619,18 @@ export default function TaskScreen() {
       if (!claimed.ok && claimed.code !== 'not_funded') {
         // Not fatal: the answer is delivered and the asker can see it. Say so
         // rather than implying the work was lost.
+        /*
+         * Named for what it costs, not for what failed. Until the claim
+         * records a verifier, the contract has nobody to pay: the asker
+         * accepting will not release the money, because release pays the
+         * address the claim wrote down and there is not one yet.
+         */
         setDeliverError(
           claimed.code === 'declined'
-            ? 'Your answer was sent. You will need to sign before you can be paid.'
-            : `Your answer was sent, but the on-chain claim failed — ${claimed.detail}`,
+            ? 'Your answer was sent, but you did not sign, so the contract does not yet ' +
+              'know to pay you. Open this job again and sign before the deadline.'
+            : 'Your answer was sent, but the contract was not told you are the one to pay ' +
+              `— ${claimed.detail}. Open this job again before the deadline to fix it.`,
         );
       }
     }
@@ -1021,6 +1052,38 @@ export default function TaskScreen() {
               </Pressable>
 
               {sendAnyway}
+
+              {/*
+                * An exit that is not another attempt.
+                *
+                * Both actions on this page used to lead back into it: retaking
+                * returns here, and sending again runs the same submit that
+                * just failed. Somebody whose submission was refused for a
+                * reason retaking cannot change — no task id, an answer already
+                * in — had no way off the screen but to kill the app.
+                */}
+              {deliverError && (
+                <Pressable
+                  onPress={() => {
+                    tap();
+                    router.replace('/(tabs)/earn');
+                  }}
+                  style={({ pressed }) => [
+                    styles.wideBtn,
+                    {
+                      backgroundColor: colors.surface,
+                      borderWidth: 2,
+                      borderColor: colors.borderStrong,
+                      opacity: pressed ? 0.88 : 1,
+                      marginTop: 10,
+                    },
+                  ]}
+                >
+                  <Text style={[text.action, { color: colors.foreground }]}>
+                    Leave this for now
+                  </Text>
+                </Pressable>
+              )}
             </>
           )}
         </ScrollView>
