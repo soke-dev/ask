@@ -279,7 +279,7 @@ export default function AskScreen() {
    * you to showed none of them — the tile described a different board than the
    * one behind it. Both sides now run isJobNearArea.
    */
-  const nearLabel = locationFilter?.label ?? homeArea.label;
+  const nearLabel = locationFilter?.label ?? homeArea?.label ?? '';
   const openLive = nearbyTasks.filter(
     (t) => t.status === 'available' && isJobNearArea(t, nearLabel),
   ).length;
@@ -1018,7 +1018,7 @@ export default function AskScreen() {
                       {q.place && (
                         <Text style={[text.data, { color: colors.faintForeground }]}>
                           {q.place.placeName}
-                          {q.place.area !== homeArea.label ? ` · ${q.place.area}` : ''}
+                          {q.place.area !== homeArea?.label ? ` · ${q.place.area}` : ''}
                         </Text>
                       )}
                     </View>
@@ -1068,7 +1068,9 @@ export default function AskScreen() {
             <View style={styles.feedHead}>
               <Text style={[text.label, { color: colors.faintForeground }]}>Answered nearby</Text>
               <Text style={[text.data, { color: colors.faintForeground }]}>
-                {homeArea.label}
+                {/* Says "Anywhere" rather than a town nobody chose. The feed
+                    behind it is genuinely unfiltered in that state. */}
+                {homeArea?.label ?? 'Anywhere'}
               </Text>
             </View>
 
@@ -1113,7 +1115,7 @@ export default function AskScreen() {
                           */}
                         {(() => {
                           const where = item.placeName || item.area;
-                          return where && where !== homeArea.label
+                          return where && where !== homeArea?.label
                             ? ` · ${shortPlace(where)}`
                             : '';
                         })()}

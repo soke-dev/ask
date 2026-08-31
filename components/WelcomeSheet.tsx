@@ -70,8 +70,8 @@ export function WelcomeSheet() {
   /**
    * Starts empty, never seeded.
    *
-   * `homeArea` defaults to Ikeja so the rest of the app has something to
-   * filter on, but that is a placeholder rather than a choice. Seeding from it
+   * `homeArea` is null until somebody chooses one, so there is nothing to
+   * seed from anyway. It used to default to Ikeja, and seeding from that
    * opened this picker already inside Lagos and offered a "Use Ikeja" button
    * to somebody in Kano who had picked nothing at all.
    */

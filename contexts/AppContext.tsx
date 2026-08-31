@@ -569,8 +569,13 @@ const FEED_ANSWERED: AnsweredQuestion[] = [];
  */
 function forArea<T extends { placeName?: string | null; area: string; state: string }>(
   items: T[],
-  home: Area,
+  home: Area | null,
 ): T[] {
+  // Nobody has said where they are, so there is nothing to narrow to. Showing
+  // everything answered is the honest answer; showing a filtered feed for a
+  // town they never picked is not.
+  if (!home) return items;
+
   const label = home.label.trim().toLowerCase();
   const stateName = home.state.trim().toLowerCase();
 
@@ -592,7 +597,7 @@ type AppContextType = {
   wallet: WalletInfo;
   setWallet: (wallet: WalletInfo) => void;
   /** The area this account calls home; drives the nearby feeds. */
-  homeArea: Area;
+  homeArea: Area | null;
   setHomeArea: (area: Area) => void;
   profile: Profile;
   updateProfile: (patch: Partial<Profile>) => void;
@@ -821,7 +826,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     reason: null,
   });
   const [wallet, setWallet] = useState<WalletInfo>(null);
-  const [homeArea, setHomeArea] = useState<Area>(AREAS[0]);
+  /**
+   * No area until somebody chooses one.
+   *
+   * This was AREAS[0], which is Ikeja, so every account that had not picked
+   * anything was silently placed in Lagos: the feed filtered to it, the job
+   * count counted it, and the Ask tab printed its name as though the person
+   * had said so. Somebody signing up in Benin City saw a different city's
+   * answers and no indication why.
+   *
+   * Null is the truthful state and every reader now handles it: the feed
+   * stops filtering, and the labels say so rather than naming a place.
+   */
+  const [homeArea, setHomeArea] = useState<Area | null>(null);
   const [profile, setProfile] = useState<Profile>({ name: '', username: '', avatarUri: null });
   const [onboarded, setOnboarded] = useState(false);
   /**

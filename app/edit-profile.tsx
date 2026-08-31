@@ -33,7 +33,7 @@ export default function EditProfileScreen() {
   const [avatarUri, setAvatarUri] = useState(profile.avatarUri);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [area, setArea] = useState<Area>(homeArea);
+  const [area, setArea] = useState<Area | null>(homeArea);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
   const [areaOpen, setAreaOpen] = useState(false);
@@ -114,9 +114,9 @@ export default function EditProfileScreen() {
         method: 'PATCH',
         body: JSON.stringify({
           username: username.trim(),
-          homeArea: area.label,
-          homeState: area.state,
-          homeCountry: 'Nigeria',
+          ...(area
+            ? { homeArea: area.label, homeState: area.state, homeCountry: 'Nigeria' }
+            : {}),
         }),
       });
       setSaving(false);
@@ -132,7 +132,7 @@ export default function EditProfileScreen() {
     }
 
     updateProfile({ username: username.trim(), avatarUri });
-    setHomeArea(area);
+    if (area) setHomeArea(area);
     router.back();
   }
 
@@ -316,14 +316,19 @@ export default function EditProfileScreen() {
         >
           <Ionicons name="location" size={16} color={colors.accent} />
           <View style={{ flex: 1 }}>
-            <Text style={[text.heading, { color: colors.foreground }]}>{area.label}</Text>
-            <Text style={[text.data, { color: colors.faintForeground }]}>{area.state}</Text>
+            <Text style={[text.heading, { color: colors.foreground }]}>
+              {area?.label ?? 'Not set'}
+            </Text>
+            <Text style={[text.data, { color: colors.faintForeground }]}>
+              {area?.state ?? 'Choose where you are'}
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.mutedForeground} />
         </Pressable>
         <Text style={[text.data, { color: colors.faintForeground, marginTop: 6 }]}>
-          Questions and answers on the Ask tab are drawn from here first, then the rest of{' '}
-          {area.state}.
+          {area
+            ? `Questions and answers on the Ask tab are drawn from here first, then the rest of ${area.state}.`
+            : 'Until you set this, the Ask tab shows answers from everywhere rather than near you.'}
         </Text>
 
         <Pressable
@@ -392,7 +397,7 @@ export default function EditProfileScreen() {
 
             <View style={{ marginTop: 16 }}>
               <AreaPicker
-                value={{ country: 'Nigeria', state: area.state, lga: area.label }}
+                value={area ? { country: 'Nigeria', state: area.state, lga: area.label } : null}
                 onChange={(picked: AreaChoice) => {
                   setArea({
                     key: picked.lga.toLowerCase().replace(/\s+/g, '-'),

@@ -147,7 +147,7 @@ export default function EarnScreen() {
    * `locationFilter` is still read because app state still carries it; nothing
    * on this screen sets it any more.
    */
-  const nearLabel = locationFilter?.label ?? homeArea.label;
+  const nearLabel = locationFilter?.label ?? homeArea?.label ?? '';
 
   const available = sortJobs(
     nearbyTasks.filter((t) => {
