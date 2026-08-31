@@ -49,8 +49,16 @@ app.use((_req, res, next) => {
    * Railway terminates TLS and forwards plain HTTP. Without this, req.protocol
    * is "http", which put an insecure scheme on every link the landing page
    * wrote about itself, and req.ip is the proxy rather than the caller.
+   *
+   * One hop, not `true`. There is exactly one proxy in front of this, and the
+   * difference matters: `true` makes Express believe the leftmost entry in
+   * X-Forwarded-For, which is a header the client writes. The admin desk locks
+   * an IP out after five wrong passwords, so a forgeable req.ip is a lockout
+   * that never fires — rotate the header, get five fresh attempts, forever.
+   * Counting one hop takes the address Railway's edge saw, which a caller
+   * cannot reach past.
    */
-  app.set('trust proxy', true);
+  app.set('trust proxy', 1);
   app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
