@@ -44,7 +44,6 @@ import {
 import {
   BOUNTY_PRESETS,
   DEFAULT_BOUNTY,
-  MAX_BOUNTY,
   MAX_TIP,
   MIN_BOUNTY,
   MIN_TIP,
@@ -318,7 +317,7 @@ export default function AskScreen() {
   // the place from the wording, which only ever worked for phrasings we had
   // hard-coded.
   const bountyValue = Number.parseInt(bounty, 10) || 0;
-  const bountyValid = bountyValue >= MIN_BOUNTY && bountyValue <= MAX_BOUNTY;
+  const bountyValid = bountyValue >= MIN_BOUNTY;
   const isCustom = bounty !== '' && !BOUNTY_PRESETS.includes(bountyValue);
 
   const deadlineValue = Number.parseInt(deadline, 10) || 0;
@@ -1454,7 +1453,7 @@ export default function AskScreen() {
               >
                 {bountyValid
                   ? `${pickupHint(bountyValue)} · verifier keeps ₦${formatNaira(verifierCut(bountyValue))}`
-                  : `Enter between ₦${formatNaira(MIN_BOUNTY)} and ₦${formatNaira(MAX_BOUNTY)}`}
+                  : `At least ₦${formatNaira(MIN_BOUNTY)}`}
               </Text>
 
               {/* ── How long they get ──────────────────────────────

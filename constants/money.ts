@@ -28,8 +28,23 @@ export const FEE_PERCENT = `${Math.round(PLATFORM_FEE * 100)}%`;
  */
 export const NAIRA_PER_USD = 1550;
 
+/**
+ * A floor, and deliberately no ceiling.
+ *
+ * The floor is for the verifier: below it nobody is being paid enough to walk
+ * anywhere, and an offer that low wastes the time of whoever reads it.
+ *
+ * There is no matching ceiling because it is the asker's own money, held in
+ * their own wallet, and a cap on what somebody may choose to spend of their
+ * own is not ours to set. What stops an unpayable job is the balance check on
+ * the server, which asks the chain what the wallet actually holds — a limit
+ * that protects a verifier from walking somewhere for a bounty that could
+ * never have been funded, rather than one that second-guesses the asker.
+ *
+ * The agent surface is the opposite case and keeps its ceilings: money spent
+ * there is ours, by anybody who opens a public page.
+ */
 export const MIN_BOUNTY = 150;
-export const MAX_BOUNTY = 50_000;
 
 /** Offered as one-tap amounts; anything else goes in by hand. */
 export const BOUNTY_PRESETS = [500, 1000];
