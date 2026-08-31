@@ -73,6 +73,24 @@ app.use(express.json({ limit: '1mb' }));
  */
 app.use((req, res, next) => {
   const started = Date.now();
+
+  /**
+   * The escrow relays are logged on arrival as well as on completion.
+   *
+   * Everything else is logged when the response finishes, which is the right
+   * default and cannot answer the one question these raise. A relay that never
+   * appears might have been sent and abandoned, or never sent at all, and from
+   * a finish-only log those are the same silence. Funding has now failed
+   * several times with a quote logged and no relay after it, and knowing which
+   * of the two it is decides whether to look at the phone or at this server.
+   */
+  if (req.method === 'POST' && /^\/escrow\/[^/]+\/(fund|claim|release|dispute)$/.test(req.path)) {
+    console.log(`ARRIVED ${req.path}`);
+    res.on('close', () => {
+      if (!res.writableEnded) console.log(`ABANDONED ${req.path} after ${Date.now() - started}ms`);
+    });
+  }
+
   res.on('finish', () => {
     const flag = res.statusCode >= 400 ? ' <-- FAILED' : '';
     console.log(
