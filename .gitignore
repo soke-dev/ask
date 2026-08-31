@@ -49,3 +49,15 @@ dist-*/
 # source is NOT backed up here yet.
 # contracts/ is part of this repository. Its own .gitignore keeps lib,
 # out, cache, broadcast and the deploy key out of it.
+
+# Anything that is a copy of an env file, however it is named.
+#
+# ".env" alone matches only that exact name, so a sibling like ".env.bak" or
+# "api/.env.local" walks straight past it. The pattern is widened rather than
+# the habit trusted.
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+!**/.env.example
