@@ -662,8 +662,20 @@ async function jobs() {
       const r = await (await fetch('/confamagent/job/' + j.id)).json();
       if (r.status === 'answered') {
         line.className = 'ln ok';
+        /*
+         * The pay link belongs here and not only on the live line. Watching a
+         * job is the one case where somebody is already looking; a refresh, a
+         * closed tab or an answer that arrived overnight all land here, and
+         * without this the only way back to paying was a command nobody had
+         * been told about.
+         */
         line.innerHTML = G + head + esc(r.answer) +
-          ' · <a href="' + esc(r.proof) + '" target="_blank" rel="noopener">proof</a>';
+          ' · <a href="' + esc(r.proof) + '" target="_blank" rel="noopener">proof</a>' +
+          (r.paid
+            ? ' · paid'
+            : ' · <a href="#" class="payit">pay ' + esc(r.verifier || 'the verifier') + '</a>');
+        const btn = line.querySelector('.payit');
+        if (btn) btn.onclick = (ev) => { ev.preventDefault(); pay(j.id, line, head); };
       } else if (r.status === 'in_progress') {
         line.className = 'ln go';
         line.innerHTML = G + head + esc(r.verifier || 'somebody') + ' is walking there';

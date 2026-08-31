@@ -36,6 +36,26 @@ export type ProofView = {
   unverifiable: string | null;
 };
 
+/**
+ * Evidence, as whatever it actually is.
+ *
+ * This page wrote an img tag for every file, so a video showed as a broken
+ * image on the one page whose entire purpose is letting somebody see the thing
+ * they are being asked to trust. The extension decides, because a job's kind is
+ * a single value and a job can carry both.
+ */
+function mediaTag(origin: string, url: string): string {
+  const clean = (url.split('?')[0] ?? '').toLowerCase();
+  const dot = clean.lastIndexOf('.');
+  const ext = dot < 0 ? '' : clean.slice(dot + 1);
+  const src = `${esc(origin)}${esc(url)}`;
+
+  if (['mp4', 'mov', 'm4v', 'webm', 'qt'].includes(ext)) {
+    return `<video src="${src}" controls playsinline preload="metadata"></video>`;
+  }
+  return `<img src="${src}" alt="evidence">`;
+}
+
 function esc(value: unknown): string {
   return String(value ?? '').replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string,
@@ -58,7 +78,7 @@ export function proofPage(p: ProofView, origin: string): string {
       (e) => `
       <div class="file">
         <a href="${esc(origin)}${esc(e.url)}" target="_blank" rel="noopener">
-          <img src="${esc(origin)}${esc(e.url)}" alt="evidence">
+          ${mediaTag(origin, e.url)}
         </a>
         <table>
           <tr><td>keccak256</td><td class="hash">${e.keccak256 ? esc(e.keccak256) : '<span class="dim">not recorded</span>'}</td></tr>
@@ -116,7 +136,8 @@ export function proofPage(p: ProofView, origin: string): string {
   a { color:var(--accent); }
   .dim { color:var(--faint); }
   .file { margin-bottom:26px; }
-  .file img {
+  .file img,
+  .file video {
     display:block; width:100%; max-width:360px; border:1px solid var(--line); margin-bottom:10px;
   }
   ol { padding-left:20px; margin:0; color:var(--dim); }

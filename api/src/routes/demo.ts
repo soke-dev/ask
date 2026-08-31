@@ -651,6 +651,12 @@ demoRouter.get('/job/:id', async (req, res) => {
     metresFromPlace: row.distanceMetres,
     capturedAt: row.capturedAt,
     verifier: row.verifier,
+    /**
+     * Answered and paid are not the same thing, and the page had no way to
+     * tell them apart: both arrive as "answered", so a job already settled
+     * looked exactly like one still owing somebody money.
+     */
+    paid: row.status === 'confirmed',
     proof: `/escrow/${req.params.id}/proof`,
     /**
      * Whether the money can be taken back, said here rather than left for the
