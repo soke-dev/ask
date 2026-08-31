@@ -18,6 +18,7 @@ import { escrowRouter } from './routes/escrow.js';
 import { storageIsEphemeral, storageIsLocal } from './storage.js';
 import { agentAddress, hasAgentWallet } from './agentWallet.js';
 import { startAgentSettlement } from './agentSettle.js';
+import { startAbandonedSweep } from './closeAbandoned.js';
 import { attachRealtime, realtimeStatus } from './realtime.js';
 import { chainStatus } from './chain.js';
 import { relayerStatus } from './relayer.js';
@@ -208,6 +209,7 @@ const server = app.listen(config.port, () => {
    * person who walked there waits for a decision nobody will make.
    */
   startAgentSettlement();
+  startAbandonedSweep();
 });
 
 // Shares the HTTP server, so realtime needs no second port and no second

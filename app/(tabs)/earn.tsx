@@ -69,6 +69,11 @@ export default function EarnScreen() {
    *
    * The button counted activeJobs while the screen behind it also shows sent
    * and queried work, so tapping "View all 1" landed on a list of three.
+   *
+   * Counting all three fixed the destination and broke the label: "View all 2"
+   * sat under a section headed "you are doing this" showing one row, and read
+   * as a miscount rather than as a different list. It names where it goes now,
+   * so the number belongs to something the reader can see it belongs to.
    */
   const openJobs = activeJobs.length + deliveredJobs.length + queriedJobs.length;
 
@@ -209,7 +214,7 @@ export default function EarnScreen() {
               ]}
             >
               <Text style={[text.action, { color: colors.foreground }]}>
-                View all {openJobs}
+                My jobs · {openJobs}
               </Text>
               <Ionicons name="arrow-forward" size={14} color={colors.foreground} />
             </Pressable>
