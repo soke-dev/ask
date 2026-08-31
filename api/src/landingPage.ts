@@ -216,9 +216,17 @@ export function landingPage(origin: string): string {
    * The glow is the only decoration on this page that is not also
    * information, so it sits behind everything and takes no clicks.
    */
+  /*
+   * The width is capped to the hero rather than fixed at 900px. Absolutely
+   * positioned and centred, a fixed 900 hangs 250-odd pixels off both sides of
+   * a phone, which is the background somebody sees when the page scrolls
+   * sideways. body has overflow-x:hidden, which is supposed to catch that and
+   * does not reliably, and cannot be tightened onto html without breaking the
+   * sticky masthead. Not overflowing in the first place needs neither.
+   */
   .glow {
     position:absolute; top:-280px; left:50%; transform:translateX(-50%);
-    width:900px; height:660px; pointer-events:none; z-index:0;
+    width:min(900px, 100%); height:660px; pointer-events:none; z-index:0;
     background:radial-gradient(50% 50% at 50% 50%, rgba(255,107,0,.15), transparent 70%);
   }
   .hero { position:relative; padding:62px 0 20px; }
@@ -226,13 +234,6 @@ export function landingPage(origin: string): string {
     position:relative; z-index:1;
     display:grid; grid-template-columns:1.22fr .78fr; gap:40px; align-items:center;
   }
-  .pill {
-    display:inline-flex; align-items:center; gap:9px; border-radius:2px;
-    border:2px solid var(--line-strong); background:var(--surface);
-    padding:6px 13px; font-size:12.5px; color:var(--muted);
-    font-family:var(--mono); margin-bottom:22px;
-  }
-  .pill i { width:7px; height:7px; background:var(--ok); border-radius:50%; font-style:normal; }
   /*
    * 800 at 64px was shouting. The page has one thing to say and it does not
    * need to be the loudest text on a screen to land it, so everything steps
@@ -337,6 +338,15 @@ export function landingPage(origin: string): string {
   @media (max-width:980px) {
     .hero .cols { grid-template-columns:1fr; gap:44px; }
     .phone { margin:0 auto; }
+  }
+  /*
+   * Gone on a phone. Stacked under the copy it costs most of a screen of
+   * scrolling to show somebody a picture of the thing they are holding, and
+   * the buttons that get them the real one end up below the fold.
+   */
+  @media (max-width:760px) {
+    .phone { display:none; }
+    .hero .cols { gap:0; }
   }
 
   /* ── Sections ─────────────────────────────────────────────────────── */
@@ -458,7 +468,6 @@ export function landingPage(origin: string): string {
     <div class="glow"></div>
     <div class="cols">
       <div>
-        <span class="pill"><i></i> live on Base mainnet</span>
         <h1>The physical world,<span>on demand.</span></h1>
         <p class="lede">
           Some things cannot be looked up. Confam pays somebody already standing there to go and
