@@ -59,7 +59,15 @@ async function step(
     return {
       ok: false,
       code: /reject|denied|cancel/i.test(message) ? 'declined' : 'sign_failed',
-      detail: /reject|denied|cancel/i.test(message) ? 'You cancelled the signature.' : message,
+      /*
+       * Labelled as a signing failure. Without the prefix this arrives beside
+       * network errors in the same sentence — "the bounty could not be locked,
+       * <message>" — and there is no way to tell from the screen whether the
+       * wallet or the server was the problem.
+       */
+      detail: /reject|denied|cancel/i.test(message)
+        ? 'You cancelled the signature.'
+        : `signing failed: ${message}`,
     };
   }
 

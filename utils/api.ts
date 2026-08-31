@@ -154,11 +154,24 @@ export async function apiFetch<T>(
      */
     const aborted =
       controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+    /*
+     * The underlying message is carried through.
+     *
+     * "the server could not be reached" is the right thing to show somebody
+     * whose train went into a tunnel, and it is useless when the request never
+     * left the device for a reason that has nothing to do with the network. A
+     * funding relay has failed repeatedly with the server confirming it never
+     * arrived, and this string was everything anybody could see. What React
+     * Native actually threw goes on the screen now.
+     */
+    const because = error instanceof Error && error.message ? ` (${error.message})` : '';
     return {
       ok: false,
       status: 0,
       code: aborted ? 'timeout' : 'unreachable',
-      detail: aborted ? 'the network did not respond' : 'the server could not be reached',
+      detail: aborted
+        ? 'the network did not respond'
+        : `the server could not be reached${because}`,
     };
   } finally {
     clearTimeout(timer);
