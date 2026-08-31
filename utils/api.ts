@@ -142,7 +142,18 @@ export async function apiFetch<T>(
 
     return { ok: true, data: parsed as T };
   } catch (error) {
-    const aborted = error instanceof Error && error.name === 'AbortError';
+    /*
+     * Asked of the controller, not of the error.
+     *
+     * React Native does not settle on one shape here: depending on the
+     * platform an aborted fetch arrives as an AbortError, as a DOMException,
+     * or as a plain "Network request failed" TypeError from the native layer.
+     * Reading the name alone reported our own timeout as the server being
+     * unreachable, which sent somebody looking for a network fault that was
+     * never there. The controller knows.
+     */
+    const aborted =
+      controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
     return {
       ok: false,
       status: 0,

@@ -39,7 +39,11 @@ console.log('push-update: publishing against', env.EXPO_PUBLIC_API_URL);
 
 const result = spawnSync(
   'npx',
-  ['eas', 'update', '--channel', 'production', '--message', message, '--non-interactive'],
+  /*
+   * The message is quoted because shell:true joins these with spaces, so an
+   * unquoted sentence arrives as one argument per word and eas rejects it.
+   */
+  ['eas', 'update', '--channel', 'production', '--message', JSON.stringify(message), '--non-interactive'],
   {
     stdio: 'inherit',
     shell: true,

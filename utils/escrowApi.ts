@@ -63,8 +63,19 @@ async function step(
     };
   }
 
+  /*
+   * Longer than the default, because the server is waiting on Base.
+   *
+   * A relay submits the transaction and then waits for its receipt, with its
+   * own 90 second ceiling. The client's default is 30, so it gave up on a call
+   * that was working: the app said the bounty could not be locked and the
+   * server said nothing at all, because a request the client abandons never
+   * reaches res.on('finish') and so is never logged. Whatever the chain does,
+   * the answer arrives here rather than being cut off mid-way.
+   */
   const relayed = await apiFetch<{ txHash: string }>(relayPath, {
     method: 'POST',
+    timeoutMs: 120_000,
     body: JSON.stringify({ signature, ...(extra ? extra(quote.data) : {}) }),
   });
   if (!relayed.ok) return { ok: false, detail: relayed.detail, code: relayed.code };
