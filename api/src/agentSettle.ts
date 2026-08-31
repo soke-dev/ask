@@ -1,7 +1,6 @@
 import { config } from './config.js';
 import { query, transaction } from './db.js';
-import { releaseAsAgent } from './agentWallet.js';
-import { notify } from './push.js';
+import { acceptAnswer } from './acceptAnswer.js';
 
 /**
  * Paying verifiers whose asker was a program that never came back.
@@ -64,50 +63,11 @@ export async function settleAgentJobs(): Promise<number> {
 
   for (const job of due) {
     try {
-      // The same accounting the app's confirm uses: the whole bounty as an
-      // earning, the platform's cut as a separate fee against the same person.
-      const feeKobo = Math.round(job.bountyKobo * 0.1);
-      const payoutKobo = job.bountyKobo - feeKobo;
-
-      await transaction(async (client) => {
-        await client.query(
-          `UPDATE tasks SET status = 'confirmed', completed_at = now() WHERE id = $1`,
-          [job.taskId],
-        );
-        await client.query(`UPDATE questions SET closed_at = now() WHERE id = $1`, [job.id]);
-        await client.query(
-          `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
-           VALUES ($1, 'earning', $2, $3, 'Answer accepted — the agent did not query it')`,
-          [job.verifierId, job.bountyKobo, job.id],
-        );
-        await client.query(
-          `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
-           VALUES ($1, 'fee', $2, $3, 'Platform fee')`,
-          [job.verifierId, feeKobo, job.id],
-        );
-      });
-
-      /**
-       * The ledger first, the chain after.
-       *
-       * A release that fails leaves money in escrow, which is recoverable and
-       * visible. A ledger that says nothing while the chain has paid out is
-       * neither.
-       */
-      const released = await releaseAsAgent(job.id);
-      if (!released.ok) {
-        console.warn('[settle] paid on the ledger but not released —', job.id, released.reason);
-      }
-
-      settled += 1;
-
-      void notify({
-        userId: job.verifierId,
-        kind: 'payment',
-        title: 'You were paid',
-        body: `Nobody queried your answer, so it was accepted. ₦${Math.round(payoutKobo / 100)} is yours.`,
-        href: '/(tabs)/you',
-      });
+      const result = await acceptAnswer(
+        job.id,
+        'Answer accepted — the agent did not query it',
+      );
+      if (!result.ok || result.already) continue;
     } catch (error) {
       console.warn('[settle] could not settle', job.id, '—', error instanceof Error ? error.message : error);
     }

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 /**
@@ -26,6 +26,8 @@ import { spawnSync } from 'node:child_process';
  * fixes that, and the noindex header keeps an unadvertised admin surface out
  * of search results.
  */
+
+const NEWLINE = String.fromCharCode(10);
 
 const eas = JSON.parse(readFileSync('eas.json', 'utf8'));
 const env = eas.build?.production?.env;
@@ -69,5 +71,16 @@ writeFileSync(
   ) + '\n',
 );
 
+/*
+ * The output directory is served as-is, so nothing may sit in it that is not
+ * meant to be public. `vercel link` writes a .env.local there holding a
+ * VERCEL_OIDC_TOKEN, and a static host asked for /.env.local may well hand it
+ * over. It is deleted, and .vercelignore keeps it and the link metadata out of
+ * any upload even if something writes them again.
+ */
+rmSync('dist/.env.local', { force: true });
+writeFileSync('dist/.vercelignore', ['.env*', '.vercel', ''].join(NEWLINE));
+
 console.log('export-web: wrote dist/vercel.json (SPA rewrite + noindex)');
+console.log('export-web: stripped any token file from the output');
 console.log('export-web: deploy with  npx vercel deploy dist --prod');

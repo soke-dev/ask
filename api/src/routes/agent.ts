@@ -11,6 +11,7 @@ import { LATEST_EVIDENCE, evidenceUrls } from '../evidenceSql.js';
 import { notify, nearbyVerifiers } from '../push.js';
 import { fundAsAgent, releaseAsAgent } from '../agentWallet.js';
 import { originOf } from '../origin.js';
+import { acceptAnswer } from '../acceptAnswer.js';
 
 export const agentRouter: Router = Router();
 
@@ -793,83 +794,29 @@ agentRouter.post('/ask', authenticateAgent, async (req, res) => {
  * released is a state somebody has to be able to see.
  */
 agentRouter.post('/ask/:id/accept', authenticateAgent, async (req, res) => {
-  const job = await one<{
-    taskId: string;
-    verifierId: string;
-    bountyKobo: number;
-    taskStatus: string;
-    verifier: string | null;
-  }>(
-    `SELECT t.id AS "taskId", t.verifier_id AS "verifierId",
-            q.bounty_kobo AS "bountyKobo", t.status::text AS "taskStatus",
-            p.username AS verifier
-       FROM questions q
-       JOIN tasks t ON t.question_id = q.id
-       LEFT JOIN profiles p ON p.user_id = t.verifier_id
-      WHERE q.id = $1 AND q.asker_id = $2`,
-    [req.params.id, req.user!.id],
+  const result = await acceptAnswer(
+    String(req.params.id),
+    'Answer accepted by an agent',
+    req.user!.id,
   );
 
-  if (!job) {
-    res.status(404).json({ error: 'not_found', detail: 'Not your job, or nobody took it.' });
+  if (!result.ok) {
+    res.status(result.error === 'not_found' ? 404 : 409).json(result);
     return;
   }
-  if (job.taskStatus === 'confirmed') {
+  if (result.already) {
     res.json({ ok: true, already: true });
     return;
   }
-  if (job.taskStatus !== 'submitted') {
-    res.status(409).json({ error: 'nothing_submitted', detail: 'No answer has come back yet.' });
-    return;
-  }
-
-  /**
-   * Written exactly as the app's own confirm writes it: the whole bounty as an
-   * earning, the platform's cut as a separate fee against the same person. Two
-   * ways of recording one payment would eventually disagree, and the ledger is
-   * what decides who was actually paid.
-   */
-  const feeKobo = Math.round(job.bountyKobo * 0.1);
-  const payoutKobo = job.bountyKobo - feeKobo;
-  // The route cannot match without it, but the type does not know that.
-  const questionId = String(req.params.id);
-
-  await transaction(async (client) => {
-    await client.query(
-      `UPDATE tasks SET status = 'confirmed', completed_at = now() WHERE id = $1`,
-      [job.taskId],
-    );
-    await client.query(`UPDATE questions SET closed_at = now() WHERE id = $1`, [questionId]);
-    await client.query(
-      `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
-       VALUES ($1, 'earning', $2, $3, 'Answer accepted by an agent')`,
-      [job.verifierId, job.bountyKobo, questionId],
-    );
-    await client.query(
-      `INSERT INTO wallet_entries (user_id, kind, amount_kobo, question_id, memo)
-       VALUES ($1, 'fee', $2, $3, 'Platform fee')`,
-      [job.verifierId, feeKobo, questionId],
-    );
-  });
-
-  const released = await releaseAsAgent(questionId);
 
   res.json({
     ok: true,
-    verifier: job.verifier,
-    paidNgn: payoutKobo / 100,
-    feeNgn: feeKobo / 100,
-    chain: released.ok
-      ? { released: true, txHash: released.txHash }
-      : { released: false, why: released.reason },
-  });
-
-  void notify({
-    userId: job.verifierId,
-    kind: 'payment',
-    title: 'You were paid',
-    body: `An agent accepted your answer. ₦${Math.round(payoutKobo / 100)} is yours.`,
-    href: '/(tabs)/you',
+    verifier: result.verifier,
+    paidNgn: result.paidKobo / 100,
+    feeNgn: result.feeKobo / 100,
+    chain: result.released.ok
+      ? { released: true, txHash: result.released.txHash }
+      : { released: false, why: result.released.why },
   });
 });
 

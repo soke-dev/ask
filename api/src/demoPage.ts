@@ -121,7 +121,8 @@ export const DEMO_PAGE = `<!doctype html>
   .ln.big   { color:#fff; font-size:17px; font-weight:700; margin:7px 0 5px; }
   .ln.dim   { color:var(--faint); }
   .ln a     { color:var(--accent); }
-  .ln img   { display:block; max-width:340px; width:100%; margin:9px 0 5px; border:1px solid var(--line); }
+  .ln img,
+  .ln video { display:block; max-width:340px; width:100%; margin:9px 0 5px; border:1px solid var(--line); }
   .gutter   { color:var(--faint); }
 
   .copy {
@@ -457,6 +458,31 @@ async function submit() {
 
 /** What the agent proposed to spend on, held while the y/n is answered. */
 let offer = { question: '', place: '', at: null };
+/*
+ * Evidence, as whatever it actually is.
+ *
+ * Both places that show evidence wrote an img tag and nothing else, so a
+ * video came back as a broken image icon: the app has accepted video since
+ * the gate was built, and this page could not display one.
+ *
+ * The extension decides rather than the job's evidenceKind, because kind is
+ * one value for the whole set and a set can hold both. Falls back to kind,
+ * then to an image, which is the commoner case and degrades to the old
+ * behaviour rather than to nothing.
+ */
+function media(url, kind) {
+  var clean = String(url).split('?')[0].toLowerCase();
+  var dot = clean.lastIndexOf('.');
+  var ext = dot < 0 ? '' : clean.slice(dot + 1);
+  var isVideo = ['mp4', 'mov', 'm4v', 'webm', 'qt'].indexOf(ext) >= 0 ||
+    (ext === '' && kind === 'video');
+
+  if (isVideo) {
+    return '<video src="' + esc(url) + '" controls playsinline preload="metadata"></video>';
+  }
+  return '<img src="' + esc(url) + '" alt="evidence" loading="lazy">';
+}
+
 /** The coordinates the last ask used, so a confirmation reuses them. */
 let lastAt = null;
 let lastArea = null;
@@ -469,6 +495,7 @@ function command(c) {
     say(G + '/key                       an API key for your own agent');
     say(G + '/jobs                      jobs posted from this browser');
     say(G + '/watch &lt;n&gt;                 follow job n for live updates');
+    say(G + '/pay &lt;n&gt;                   accept job n and pay whoever went');
     say(G + '/clear                     clear the screen');
     return;
   }
@@ -482,6 +509,15 @@ function command(c) {
     if (!j) { say(G + 'no job ' + (n || '') + '. /jobs to see them.', 'warn'); return; }
     const line = say(G + esc(j.question) + ' @ ' + esc(j.place) + ' — following...', 'dim');
     watch(j.id, line);
+    return;
+  }
+  if (name === 'pay') {
+    const n = parseInt(c.slice(1).split(' ')[1], 10);
+    const list = saved();
+    const j = list[n - 1];
+    if (!j) { say(G + 'no job ' + (n || '') + '. /jobs to see them.', 'warn'); return; }
+    const line = say(G + esc(j.question) + ' @ ' + esc(j.place) + ' — paying...', 'dim');
+    pay(j.id, line, '');
     return;
   }
   if (name === 'key') return getKey();
@@ -518,7 +554,7 @@ function render(d, question, place) {
     say(esc(d.answer), 'big');
     say(G + 'asked as "' + esc(d.askedAs) + '" · ' + d.ageMinutes + ' min ago' +
         (d.verifier ? ' · checked by ' + esc(d.verifier) : ''), 'dim');
-    (d.evidence || []).forEach(u => say('<img src="' + esc(u) + '" alt="evidence">', 'dim'));
+    (d.evidence || []).forEach(u => say(media(u, d.proof), 'dim'));
     say(G + '<a href="/escrow/' + esc(d.questionId) + '/proof" target="_blank" rel="noopener">' +
         'verify on Base →</a> · cost ₦' + d.costNgn, 'dim');
     return;
@@ -580,8 +616,12 @@ function watch(id, line) {
         say(esc(j.answer), 'big');
         say(G + (j.metresFromPlace != null ? j.metresFromPlace + 'm from the pin · ' : '') +
             (j.capturedAt ? new Date(j.capturedAt).toUTCString() : ''), 'dim');
-        (j.evidence || []).forEach(u => say('<img src="' + esc(u) + '" alt="evidence">', 'dim'));
-        say(G + '<a href="' + esc(j.proof) + '" target="_blank" rel="noopener">verify on Base →</a>', 'dim');
+        (j.evidence || []).forEach(u => say(media(u, j.evidenceKind), 'dim'));
+        const done = say(G + '<a href="' + esc(j.proof) + '" target="_blank" rel="noopener">' +
+            'verify on Base →</a> · <a href="#" class="payit">pay ' +
+            esc(j.verifier || 'the verifier') + ' →</a>', 'dim');
+        const btn = done.querySelector('.payit');
+        if (btn) btn.onclick = (ev) => { ev.preventDefault(); pay(id, done, ''); };
         feed();
       }
     } catch {}
@@ -739,6 +779,50 @@ function docs() {
   say(K + 'program cannot honestly provide. verifiers are people, on purpose.', 'sys');
   say('');
   say(K + 'confam.xyz', 'dim');
+}
+
+/*
+ * Releases the escrow to whoever walked there.
+ *
+ * The sweep does this on its own a quarter of an hour after an answer nobody
+ * queried, which exists so a verifier is never stranded by a program that
+ * stopped calling. It was never meant to be the only way: somebody sitting
+ * here watching their own answer arrive should be able to pay for it there and
+ * then, and until now this page could open a job and refund a dead one but had
+ * no way to finish a live one.
+ */
+async function pay(id, line, head) {
+  line.className = 'ln dim';
+  line.innerHTML = G + head + 'releasing the escrow...';
+  try {
+    const r = await (await fetch('/confamagent/job/' + id + '/accept', { method: 'POST' })).json();
+    if (r.ok && r.already) {
+      line.className = 'ln ok';
+      line.innerHTML = G + head + 'already paid';
+      return;
+    }
+    if (r.ok) {
+      line.className = 'ln ok';
+      line.innerHTML = G + head + 'paid ' + esc(r.verifier || 'the verifier') +
+        ' ₦' + esc(String(r.paidNgn)) +
+        (r.chain && r.chain.txHash
+          ? ' · <a href="https://basescan.org/tx/' + esc(r.chain.txHash) +
+            '" target="_blank" rel="noopener">' + esc(String(r.chain.txHash).slice(0, 20)) + '...</a>'
+          : '');
+      if (r.chain && r.chain.released === false) {
+        say(G + 'the ledger has it, but the release did not go through — ' +
+            esc(r.chain.why || 'no reason given'), 'warn');
+      }
+      budget();
+      feed();
+    } else {
+      line.className = 'ln warn';
+      line.innerHTML = G + head + 'could not pay — ' + esc(r.detail || r.error);
+    }
+  } catch (e) {
+    line.className = 'ln warn';
+    line.innerHTML = G + head + 'could not pay — ' + esc(e.message || e);
+  }
 }
 
 /** Asks the contract for an expired job's money back. */

@@ -9,6 +9,7 @@ import { notify, nearbyVerifiers } from '../push.js';
 import { DEMO_PAGE } from '../demoPage.js';
 import { fundAsAgent } from '../agentWallet.js';
 import { relayRefund } from '../escrow.js';
+import { acceptAnswer } from '../acceptAnswer.js';
 
 export const demoRouter: Router = Router();
 
@@ -545,6 +546,53 @@ demoRouter.post('/job/:id/refund', async (req, res) => {
     console.warn('[demo] refund failed —', detail);
     res.status(502).json({ error: 'refund_failed', detail: detail.slice(0, 160) });
   }
+});
+
+/**
+ * Paying the verifier, from the terminal.
+ *
+ * The sweep accepts an unqueried answer after fifteen minutes, which is there
+ * so nobody who walked somewhere is left waiting on a program that stopped
+ * calling. It is not a substitute for this: somebody watching their own job
+ * come back should not have to wait a quarter of an hour to pay for it, and
+ * until now the terminal could start a job and refund a dead one but could not
+ * finish a live one.
+ *
+ * Unauthenticated, and only ever for jobs this page created — the same
+ * ownership check the refund uses, for the same reason.
+ */
+demoRouter.post('/job/:id/accept', async (req, res) => {
+  const mine = await one<{ id: string }>(
+    `SELECT q.id
+       FROM questions q
+       JOIN api_keys k ON k.id = q.asked_by_key AND k.name = 'demo'
+      WHERE q.id = $1`,
+    [req.params.id],
+  );
+  if (!mine) {
+    res.status(404).json({ error: 'not_found' });
+    return;
+  }
+
+  const result = await acceptAnswer(String(req.params.id), 'Answer accepted from the terminal');
+  if (!result.ok) {
+    res.status(result.error === 'not_found' ? 404 : 409).json(result);
+    return;
+  }
+  if (result.already) {
+    res.json({ ok: true, already: true });
+    return;
+  }
+
+  res.json({
+    ok: true,
+    verifier: result.verifier,
+    paidNgn: result.paidKobo / 100,
+    feeNgn: result.feeKobo / 100,
+    chain: result.released.ok
+      ? { released: true, txHash: result.released.txHash }
+      : { released: false, why: result.released.why },
+  });
 });
 
 /**
