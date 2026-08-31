@@ -143,6 +143,13 @@ export function landingPage(origin: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Confam — the physical world, on demand</title>
 <meta name="description" content="Ask about any place in Nigeria. Confam answers from evidence somebody already verified, or pays a person nearby to walk there and send back a photo or a video.">
+<!--
+  Base app verification. Base fetches this page and looks for the tag to
+  confirm we control the domain, so it has to sit in the head of what
+  www.confam.xyz actually serves — which is this file, proxied through
+  Vercel from Railway, not a static page anybody could edit by hand.
+-->
+<meta name="base:app_id" content="6a95c4ccaffbbc90e48888eb">
 <meta property="og:title" content="Confam — the physical world, on demand">
 <meta property="og:description" content="Somebody already standing there goes and looks, and sends back the photo or the video.">
 <link rel="icon" href="${LOGO_DATA_URI}">
