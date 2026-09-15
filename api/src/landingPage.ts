@@ -1,7 +1,6 @@
 import { LOGO_DATA_URI } from './logo.js';
 import { config } from './config.js';
 import { APP_SHOT_DATA_URI, APP_SHOT_BG, APP_SHOT_SIZE } from './appShot.js';
-import { ANDROID_BADGE, TESTFLIGHT_BADGE, type StoreBadge } from './storeBadges.js';
 
 /**
  * The front door.
@@ -73,6 +72,18 @@ const ICONS: Record<string, string> = {
   terminal: '<rect x="3.2" y="4.4" width="17.6" height="15.2" rx="2.2"/>'
           + '<path d="M3.2 9h17.6"/><path d="m7.6 13 2.2 2.2-2.2 2.2M12.8 17.2h4"/>',
 
+  /*
+   * Outlined, not filled. A solid body needs its eyes punched out in the
+   * colour behind it, and an icon cannot know what it is sitting on.
+   */
+  android: '<path d="M6 10.6a6 6 0 0 1 12 0v6.2a1.8 1.8 0 0 1-1.8 1.8H7.8A1.8 1.8 0 0 1 6 16.8z"/>'
+         + '<path d="M8.6 5.7 7.2 3.2M15.4 5.7l1.4-2.5"/>'
+         + '<circle cx="9.9" cy="9.9" r=".55" fill="currentColor" stroke="none"/>'
+         + '<circle cx="14.1" cy="9.9" r=".55" fill="currentColor" stroke="none"/>',
+
+  /* Simple Icons, MIT. Filled: a silhouette with a stroke on it reads wrong. */
+  apple: '<path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.088-4.61 1.088zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/>',
+
   mail: '<rect x="3.2" y="5.2" width="17.6" height="13.6" rx="2.2"/>'
       + '<path d="m3.8 6.6 8.2 5.9 8.2-5.9"/>',
 
@@ -89,23 +100,42 @@ const ICONS: Record<string, string> = {
 
 function icon(name: string, solid = false): string {
   const body = ICONS[name];
-  if (!body) return '';
+  /*
+   * Loud, because quiet was how this broke.
+   *
+   * Returning an empty string meant a removed or mistyped name rendered as
+   * nothing at all: the store chips lost their Apple and Android marks when
+   * those entries were deleted along with the vendor badges, and the page
+   * carried on serving buttons with a hole where the logo had been. A throw
+   * is caught by the build, which renders this page once for that reason.
+   */
+  if (!body) throw new Error(`landingPage: no icon named "${name}"`);
   return `<svg class="ico${solid ? ' solid' : ''}" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
 }
 
 /**
- * A store badge, linked when there is something to link to.
+ * One way in.
  *
- * Dimmed and captioned rather than hidden when there is not: "coming soon" is
- * a fact somebody wants, and a button that is not there answers nothing. It is
- * a span in that case, so it cannot be clicked into a page that does not exist.
+ * The two store badges used to be the vendors' own artwork, and they could not
+ * be made to sit together: Apple ships the TestFlight badge on white and the
+ * Android one here is on black, so on a dark page one of them was always a
+ * bright rectangle beside a black one. Same size, nothing like the same
+ * weight.
+ *
+ * So the row is three chips of our own carrying the real Apple and Android
+ * marks. Neither store requires its badge for a direct APK or a TestFlight
+ * link, and a row that matches reads as more considered than one assembled
+ * from two other companies' assets.
+ *
+ * Unset is still a real state: it stays as a span so it cannot be clicked
+ * into a page that does not exist, and says so rather than disappearing.
  */
-function storeBadge(href: string, badge: StoreBadge): string {
-  const img =
-    `<img src="${badge.src}" width="${badge.width}" height="${badge.height}"` +
-    ` alt="${esc(badge.alt)}">`;
-  if (!href) return `<span class="badge off">${img}<em>coming soon</em></span>`;
-  return `<a class="badge" href="${esc(href)}">${img}</a>`;
+function chip(href: string, mark: string, title: string, sub: string, lead = false): string {
+  const face =
+    `${mark}<span class="txt"><b>${esc(title)}</b>` +
+    `<em>${esc(href ? sub : 'coming soon')}</em></span>`;
+  if (!href) return `<span class="btn off">${face}</span>`;
+  return `<a class="btn${lead ? ' lead' : ''}" href="${esc(href)}">${face}</a>`;
 }
 
 /**
@@ -134,7 +164,9 @@ export function landingPage(origin: string): string {
 
   // The same pair opens the page and closes it, so a reader who scrolls the
   // whole thing does not have to scroll back up to act on it.
-  const stores = storeBadge(apk, ANDROID_BADGE) + storeBadge(testflight, TESTFLIGHT_BADGE);
+  const stores =
+    chip(apk, icon('android'), 'Download for Android', 'APK, installs directly') +
+    chip(testflight, icon('apple', true), 'Get it on iPhone', 'TestFlight beta');
 
   return `<!doctype html>
 <html lang="en">
@@ -255,49 +287,30 @@ export function landingPage(origin: string): string {
   .asks { font-family:var(--mono); font-size:13.5px; color:var(--fg); margin:20px 0 28px; }
   .asks span { color:var(--faint); }
 
-  .badges { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; }
+  .badges { display:flex; flex-wrap:wrap; gap:12px; align-items:stretch; }
   .badges.centre { justify-content:center; }
-  .badge { display:block; text-decoration:none; }
   /*
-   * One box for both, not one height.
+   * Every way in is the same shape.
    *
-   * The two badges are 296 and 312 wide over the same 104, so matching only
-   * the height left them 137px and 144px and reading as a mismatched pair.
-   * A shared box with object-fit lets each piece of artwork sit inside it at
-   * its own proportions rather than being stretched to fill.
+   * Stretch rather than flex-start, so the three share a bottom edge whatever
+   * their text does. They did not before: the badges were a fixed 48 tall and
+   * the chip beside them was 55, and nothing lined up.
    */
-  .badge img { display:block; width:144px; height:48px; object-fit:contain; }
-  .badge:hover img { filter:brightness(1.12); }
-  /* The caption stays legible; it is the badge that is greyed out, not the fact. */
-  .badge.off { cursor:default; }
-  .badge.off img { opacity:.36; }
+  .badges .btn { min-width:200px; }
+  .badges .btn.off { background:var(--sunken); border-color:var(--line); color:var(--faint); cursor:default; }
+  .badges .btn.off .ico { color:var(--faint); }
+
   /*
-   * Sized to the badges beside it rather than to its own text. Three things
-   * on one row that do not share a top edge read as an accident.
-   *
-   * It also carries the accent, because until the two builds are out this is
-   * the only one of the three that goes anywhere, and it was the greyest
-   * thing in the row. The fill arrives on hover rather than sitting there:
-   * a solid orange block beside two store badges reads as an advert for
-   * itself, and this is meant to be the quiet third option that happens to
-   * work today.
+   * One of the three carries the accent, and it is whichever needs no install.
+   * Three outlined chips in a row give a reader nowhere to look first.
    */
-  .badges .btn {
-    padding:8px 16px; border-color:var(--accent);
-    background:linear-gradient(180deg,rgba(255,107,0,.10),rgba(255,107,0,.03));
-    transition:background .16s ease, color .16s ease;
-  }
-  .badges .btn .ico { color:var(--accent); }
-  .badges .btn em { color:var(--muted); }
-  .badges .btn .go { display:flex; margin-left:4px; transition:transform .16s ease; }
-  .badges .btn:hover { background:var(--accent); color:#0A0A0A; }
-  .badges .btn:hover .ico { color:#0A0A0A; }
-  .badges .btn:hover em { color:#0A0A0A; opacity:.72; }
-  .badges .btn:hover .go { transform:translateX(3px); }
-  .badge em {
-    display:block; font-style:normal; text-align:center;
-    font-size:12px; color:var(--faint); margin-top:8px;
-  }
+  .badges .btn.lead { border-color:var(--accent); }
+  .badges .btn.lead .ico { color:var(--accent); }
+  .badges .btn.lead:hover { background:var(--accent); color:#0A0A0A; }
+  .badges .btn.lead:hover .ico { color:#0A0A0A; }
+  .badges .btn.lead:hover em { color:#0A0A0A; opacity:.72; }
+  .badges .btn.lead:hover .go { transform:translateX(3px); }
+  .badges .btn .go { display:flex; margin-left:auto; padding-left:8px; transition:transform .16s ease; }
 
   .btn {
     display:flex; align-items:center; gap:11px; text-decoration:none;
@@ -495,7 +508,7 @@ export function landingPage(origin: string): string {
 
         <div class="badges" id="get">
           ${stores}
-          <a class="btn" href="${esc(origin)}/confamagent">
+          <a class="btn lead" href="${esc(origin)}/confamagent">
             ${icon('terminal')}
             <span class="txt"><b>Try Confam Agent</b><em>nothing to install</em></span>
             <span class="go">${icon('arrow')}</span>

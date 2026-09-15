@@ -37,3 +37,21 @@ try {
 } finally {
   try { unlinkSync(file); } catch {}
 }
+
+/*
+ * The landing page is rendered once, for the same reason the terminal's script
+ * is parsed: it is generated, nothing imports it at build time, and a fault in
+ * it is invisible until somebody loads the site.
+ *
+ * icon() throws on a name it does not have. That is not hypothetical — the
+ * Apple and Android marks were deleted along with the store badges that had
+ * replaced them, and the chips went out with a hole where each logo belonged.
+ */
+const { landingPage } = await import('../dist/landingPage.js');
+const page = landingPage('https://www.confam.xyz');
+
+const icons = (page.match(/<svg class="ico/g) || []).length;
+if (icons < 12) {
+  throw new Error(`check-demo: only ${icons} icons rendered on the landing page`);
+}
+console.log(`check-demo: landing page renders (${page.length} chars, ${icons} icons)`);
