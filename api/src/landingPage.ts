@@ -258,7 +258,15 @@ export function landingPage(origin: string): string {
   .badges { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start; }
   .badges.centre { justify-content:center; }
   .badge { display:block; text-decoration:none; }
-  .badge img { display:block; height:48px; width:auto; }
+  /*
+   * One box for both, not one height.
+   *
+   * The two badges are 296 and 312 wide over the same 104, so matching only
+   * the height left them 137px and 144px and reading as a mismatched pair.
+   * A shared box with object-fit lets each piece of artwork sit inside it at
+   * its own proportions rather than being stretched to fill.
+   */
+  .badge img { display:block; width:144px; height:48px; object-fit:contain; }
   .badge:hover img { filter:brightness(1.12); }
   /* The caption stays legible; it is the badge that is greyed out, not the fact. */
   .badge.off { cursor:default; }
