@@ -98,6 +98,14 @@ export function miniTestPage(): string {
 <div id="recOut"></div>
 <video id="play" playsinline controls></video>
 
+<h2>Upload</h2>
+<button id="up" class="ghost" disabled>Send the recording to the server</button>
+<div id="upOut"></div>
+
+<h2>Wallet</h2>
+<button id="wallet">Connect and sign</button>
+<div id="wOut"></div>
+
 <h2>Location</h2>
 <button id="geo">Ask for location</button>
 <div id="geoOut"></div>
@@ -246,6 +254,8 @@ export function miniTestPage(): string {
                 Math.round((kb / seconds) * 10) + ' kB'
               : 'produced an empty file');
         if (blob.size) {
+          window.__recording = blob;
+          document.getElementById('up').disabled = false;
           var pl = document.getElementById('play');
           pl.src = URL.createObjectURL(blob);
           pl.style.display = 'block';
@@ -262,6 +272,96 @@ export function miniTestPage(): string {
     }).catch(function (e) {
       row(out, 'Recording', 'no', 'camera or microphone refused: ' + e.name + ': ' + e.message);
     });
+  };
+
+  /* ---- upload ----------------------------------------------------------
+   *
+   * The one that decides whether any of this is usable. A recording that
+   * cannot leave the WebView is not evidence, and the time it takes on the
+   * connection a verifier is actually standing on matters as much as whether
+   * it succeeds at all.
+   */
+  document.getElementById('up').onclick = function () {
+    var out = document.getElementById('upOut');
+    out.innerHTML = '';
+    var blob = window.__recording;
+    if (!blob) { row(out, 'Upload', 'no', 'record something first'); return; }
+
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Uploading...';
+    var started = Date.now();
+
+    fetch('/minitest/upload', {
+      method: 'POST',
+      headers: { 'content-type': blob.type || 'application/octet-stream' },
+      body: blob,
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+      .then(function (res) {
+        var secs = (Date.now() - started) / 1000;
+        var kb = Math.round(blob.size / 1024);
+        if (!res.ok) {
+          row(out, 'Upload', 'no', 'server said ' + res.status + ': ' + JSON.stringify(res.j));
+        } else {
+          var same = res.j.kb === kb;
+          row(out, 'Upload', same ? 'ok' : 'no',
+              res.j.kb + ' kB arrived in ' + secs.toFixed(1) + 's' +
+              String.fromCharCode(10) + Math.round(kb / secs) + ' kB per second' +
+              String.fromCharCode(10) + (same ? 'size matches what was sent' : 'SIZE MISMATCH, sent ' + kb) +
+              String.fromCharCode(10) + 'hash ' + String(res.j.keccak256).slice(0, 22) + '...');
+        }
+      })
+      .catch(function (e) { row(out, 'Upload', 'no', e.name + ': ' + e.message); })
+      .finally(function () { btn.disabled = false; btn.textContent = 'Send the recording to the server'; });
+  };
+
+  /* ---- wallet ----------------------------------------------------------
+   *
+   * The whole sign-in, end to end: an address from the host, a nonce from the
+   * server, a signature, and the server recovering that same address from it.
+   * If this works there is no sign-in screen to build.
+   */
+  document.getElementById('wallet').onclick = function () {
+    var out = document.getElementById('wOut');
+    out.innerHTML = '';
+    var eth = window.ethereum;
+    if (!eth) { row(out, 'Wallet', 'no', 'window.ethereum is not injected'); return; }
+
+    var address;
+    eth.request({ method: 'eth_requestAccounts' })
+      .then(function (accounts) {
+        address = accounts && accounts[0];
+        if (!address) throw new Error('no account returned');
+        row(out, 'Address', 'ok', address);
+        return eth.request({ method: 'eth_chainId' });
+      })
+      .then(function (chainId) {
+        row(out, 'Chain', 'ok', chainId + (chainId === '0x89' ? ' (Polygon)' : ' (not Polygon)'));
+        return fetch('/minitest/challenge', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ address: address }),
+        }).then(function (r) { return r.json(); });
+      })
+      .then(function (j) {
+        row(out, 'Challenge', 'ok', j.message);
+        return eth.request({ method: 'personal_sign', params: [j.message, address] });
+      })
+      .then(function (signature) {
+        row(out, 'Signature', 'ok', String(signature).slice(0, 26) + '...');
+        return fetch('/minitest/verify', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ address: address, signature: signature }),
+        }).then(function (r) { return r.json(); });
+      })
+      .then(function (j) {
+        row(out, 'Server verified', j.ok ? 'ok' : 'no',
+            j.ok ? 'the signature recovers to that address, so sign-in works'
+                 : 'did not verify: ' + JSON.stringify(j));
+      })
+      .catch(function (e) { row(out, 'Wallet', 'no', (e.code ? 'code ' + e.code + ' ' : '') + (e.message || e)); });
   };
 
   /* ---- location ------------------------------------------------------ */
