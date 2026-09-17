@@ -106,6 +106,10 @@ export function miniTestPage(): string {
 <button id="wallet">Connect and sign</button>
 <div id="wOut"></div>
 
+<h2>Chain</h2>
+<button id="poly" class="ghost">Switch to Polygon</button>
+<div id="polyOut"></div>
+
 <h2>Location</h2>
 <button id="geo">Ask for location</button>
 <div id="geoOut"></div>
@@ -162,7 +166,19 @@ export function miniTestPage(): string {
       row(out, 'Camera', 'no', 'navigator.mediaDevices is not available at all');
       return;
     }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+    /*
+     * Asking for nothing got 640 by 480. A WebView hands back the lowest
+     * common denominator unless told otherwise, and VGA is too little for
+     * evidence: the blur and exposure scores have less to read, and a proof
+     * page is meant to convince somebody who was not there.
+     */
+    navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+    })
       .then(function (s) {
         stream = s;
         var v = document.getElementById('v');
@@ -225,7 +241,11 @@ export function miniTestPage(): string {
 
     /* Audio too, because the app records it and a microphone is its own grant. */
     navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' } },
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
       audio: true,
     }).then(function (s) {
       var chunks = [];
@@ -362,6 +382,44 @@ export function miniTestPage(): string {
                  : 'did not verify: ' + JSON.stringify(j));
       })
       .catch(function (e) { row(out, 'Wallet', 'no', (e.code ? 'code ' + e.code + ' ' : '') + (e.message || e)); });
+  };
+
+  /* ---- switching chain -------------------------------------------------
+   *
+   * Nimiq Pay opens on Ethereum. Every escrow call has to happen on Polygon,
+   * so the mini app must move the wallet first and know what that looks like
+   * to the person holding the phone: whether it prompts, whether it can be
+   * refused, and whether the chain stays switched afterwards.
+   */
+  document.getElementById('poly').onclick = function () {
+    var out = document.getElementById('polyOut');
+    out.innerHTML = '';
+    var eth = window.ethereum;
+    if (!eth) { row(out, 'Switch', 'no', 'window.ethereum is not injected'); return; }
+
+    eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x89' }] })
+      .then(function () { return eth.request({ method: 'eth_chainId' }); })
+      .then(function (id) {
+        row(out, 'Switch', id === '0x89' ? 'ok' : 'no',
+            id === '0x89' ? 'now on Polygon (0x89)' : 'asked for 0x89 but still on ' + id);
+        /* And can we read a balance there — is there USDT to spend? */
+        return eth.request({ method: 'eth_accounts' }).then(function (accts) {
+          if (!accts || !accts[0]) return;
+          var data = '0x70a08231000000000000000000000000' + accts[0].slice(2);
+          return eth.request({
+            method: 'eth_call',
+            params: [{ to: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', data: data }, 'latest'],
+          }).then(function (hex) {
+            var raw = BigInt(hex || '0x0');
+            row(out, 'USDT balance', raw > 0n ? 'ok' : 'no',
+                (Number(raw) / 1e6).toFixed(6) + ' USDT on Polygon' +
+                (raw > 0n ? '' : ' - nothing to spend, top up before testing a payment'));
+          });
+        });
+      })
+      .catch(function (e) {
+        row(out, 'Switch', 'no', (e.code ? 'code ' + e.code + ' ' : '') + (e.message || e));
+      });
   };
 
   /* ---- location ------------------------------------------------------ */
