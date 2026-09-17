@@ -61,6 +61,7 @@ export function miniTestPage(): string {
   button.ghost { background:var(--surface); color:var(--fg); border:2px solid var(--line); }
   button:disabled { opacity:.5; }
 
+  #play { display:none; }
   video, canvas {
     display:block; width:100%; border:2px solid var(--line); border-radius:2px;
     margin-top:10px; background:#000;
@@ -91,6 +92,11 @@ export function miniTestPage(): string {
 <button id="snap" class="ghost" disabled>Take a still</button>
 <canvas id="c"></canvas>
 <img id="shot" alt="captured frame">
+
+<h2>Video</h2>
+<button id="rec" class="ghost" disabled>Record 5 seconds</button>
+<div id="recOut"></div>
+<video id="play" playsinline controls></video>
 
 <h2>Location</h2>
 <button id="geo">Ask for location</button>
@@ -137,6 +143,7 @@ export function miniTestPage(): string {
           : 'MediaRecorder is not available');
 
   row(envEl, 'User agent', 'ok', navigator.userAgent);
+  if (rec && types.length) document.getElementById('rec').disabled = false;
 
   /* ---- camera -------------------------------------------------------- */
   var stream = null;
@@ -181,6 +188,80 @@ export function miniTestPage(): string {
           Math.round(blob.size / 1024) + ' kB as ' + blob.type);
       if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
     }, 'image/jpeg', 0.85);
+  };
+
+  /* ---- video ----------------------------------------------------------
+   *
+   * Reporting a supported mime type and producing a file somebody can watch
+   * are different claims, and the second is the one that matters. The size is
+   * what decides whether video is usable at all: a verifier on Nigerian mobile
+   * data uploading four megabytes for a ten second clip is a verifier who
+   * gives up, so the bitrate is capped here to find out what that buys.
+   */
+  function bestType() {
+    var want = ['video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    for (var i = 0; i < want.length; i += 1) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(want[i])) return want[i];
+    }
+    return '';
+  }
+
+  document.getElementById('rec').onclick = function () {
+    var out = document.getElementById('recOut');
+    out.innerHTML = '';
+    var btn = this;
+
+    if (!window.MediaRecorder) { row(out, 'Recording', 'no', 'MediaRecorder is not available'); return; }
+    var type = bestType();
+    if (!type) { row(out, 'Recording', 'no', 'no supported container'); return; }
+
+    /* Audio too, because the app records it and a microphone is its own grant. */
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: true,
+    }).then(function (s) {
+      var chunks = [];
+      var started = Date.now();
+      var mr;
+      try {
+        mr = new MediaRecorder(s, { mimeType: type, videoBitsPerSecond: 600000 });
+      } catch (e) {
+        row(out, 'Recording', 'no', 'constructor refused: ' + e.name + ': ' + e.message);
+        s.getTracks().forEach(function (t) { t.stop(); });
+        return;
+      }
+
+      mr.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+      mr.onerror = function (e) { row(out, 'Recording', 'no', 'error: ' + (e.error || e)); };
+      mr.onstop = function () {
+        var seconds = (Date.now() - started) / 1000;
+        s.getTracks().forEach(function (t) { t.stop(); });
+        var blob = new Blob(chunks, { type: type });
+        var kb = Math.round(blob.size / 1024);
+        row(out, 'Recording', blob.size ? 'ok' : 'no',
+            blob.size
+              ? kb + ' kB for ' + seconds.toFixed(1) + 's as ' + blob.type +
+                String.fromCharCode(10) + Math.round(kb / seconds) + ' kB per second' +
+                String.fromCharCode(10) + 'a 10s clip would be about ' +
+                Math.round((kb / seconds) * 10) + ' kB'
+              : 'produced an empty file');
+        if (blob.size) {
+          var pl = document.getElementById('play');
+          pl.src = URL.createObjectURL(blob);
+          pl.style.display = 'block';
+          row(out, 'Playback', 'ok', 'press play above to confirm it is watchable');
+        }
+        btn.disabled = false;
+        btn.textContent = 'Record 5 seconds';
+      };
+
+      mr.start();
+      btn.textContent = 'Recording...';
+      btn.disabled = true;
+      setTimeout(function () { if (mr.state !== 'inactive') mr.stop(); }, 5000);
+    }).catch(function (e) {
+      row(out, 'Recording', 'no', 'camera or microphone refused: ' + e.name + ': ' + e.message);
+    });
   };
 
   /* ---- location ------------------------------------------------------ */
