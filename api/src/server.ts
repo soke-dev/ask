@@ -18,6 +18,7 @@ import { escrowRouter } from './routes/escrow.js';
 import { storageIsEphemeral, storageIsLocal } from './storage.js';
 import { agentAddress, hasAgentWallet } from './agentWallet.js';
 import { startAgentSettlement } from './agentSettle.js';
+import { miniTestPage } from './miniTestPage.js';
 import { startAbandonedSweep } from './closeAbandoned.js';
 import { attachRealtime, realtimeStatus } from './realtime.js';
 import { chainStatus } from './chain.js';
@@ -188,6 +189,20 @@ if (storageIsLocal) {
  *
  * Last, so nothing here can shadow a route that carries data.
  */
+/*
+ * A throwaway that answers one question: does a Nimiq Pay WebView hand a mini
+ * app the camera and the location? Their docs cover providers and network
+ * access and say nothing about device APIs, and the answer decides whether
+ * verifiers can work inside Nimiq Pay or only in the app.
+ *
+ * Served from here because getUserMedia is refused outside a secure context,
+ * so a LAN address would fail for the wrong reason. Delete once it has been
+ * read once.
+ */
+app.get('/minitest', (_req, res) => {
+  res.type('html').send(miniTestPage());
+});
+
 app.get('/', (req, res) => {
   res.type('html').send(landingPage(originOf(req)));
 });
